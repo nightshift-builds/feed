@@ -22,7 +22,7 @@ class Aggregate(unittest.TestCase):
         rows = [row(1, 10, NOW - 5 * DAY, True), row(1, 10, NOW - 4 * DAY, True), row(1, 10, NOW - 3 * DAY), row(1, 11, NOW - 2 * DAY),
                 row(1, None, NOW - DAY), row(2, 10, NOW - 6 * DAY), row(2, 77, NOW - DAY), row(9, 10, NOW)]   # 9: not in the pool
         u = rank.aggregate(rows, circ, {}, NOW, {10, 11})
-        self.assertEqual(u.runs[10][1], [3, 2, NOW - 3 * DAY])
+        self.assertEqual(u.runs[10][1], [3, 2, NOW - 3 * DAY, NOW - 5 * DAY])   # games, wins, last and first start_time
         self.assertEqual(u.main[1], 10)
         self.assertEqual(u.main[2], 77)        # one game each on 10 and 77: the later last game wins
         self.assertEqual(u.games, 7)
@@ -38,6 +38,18 @@ class Aggregate(unittest.TestCase):
         self.assertEqual(u.runs[21][4][0], 3)
         self.assertNotIn(20, u.runs)
         self.assertEqual(u.main[4], 21)
+
+
+class Trend(unittest.TestCase):
+    def test_trend_halves(self):
+        # tr = [players with a game on the build in the last 7 days, players with one in the 7 days before]: 1 played in both halves,
+        # 2 only lately, 3 only before, 4 is Ascendant (not in Eternus+)
+        circ = {1: "ete", 2: "ete", 3: "ete", 4: "asc"}
+        rows = [row(1, 10, NOW - DAY), row(1, 10, NOW - 10 * DAY), row(2, 10, NOW - 2 * DAY), row(3, 10, NOW - 9 * DAY), row(4, 10, NOW - DAY)]
+        u = rank.aggregate(rows, circ, {}, NOW, {10})
+        self.assertEqual(rank.use_of(u, 10, "ete", circ, NOW)["tr"], [2, 2])
+        self.assertEqual(rank.use_of(u, 10, "asc", circ, NOW)["tr"], [3, 2])
+        self.assertEqual(rank.use_of(u, 99, "ete", circ, NOW)["tr"], [0, 0])
 
 
 class Use(unittest.TestCase):

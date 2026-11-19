@@ -294,7 +294,8 @@ class World:
     def assets(self):
         self._call("assets")
         heroes = {h: {"key": k, "slots": {h * 100 + s: s for s in (1, 2, 3, 4)}} for h, k in self.heroes}
-        up = {ITEM_ID[c]: [c, c != UNSHOPABLE] for c in ITEMS}
+        # [class name, shopable, slot (g weapon, v vitality, s spirit), cost], as sources.assets reads them
+        up = {ITEM_ID[c]: [c, c != UNSHOPABLE, ("g", "v", "s")[i % 3], 500 * (1 + i % 4)] for i, c in enumerate(ITEMS)}
         ab = {h * 100 + s: "ab_%s_%d" % (k, s) for h, k in self.heroes for s in (1, 2, 3, 4)}
         return {"heroes": heroes, "items_up": up, "items_ab": ab, "big_patch": self.big_patch}
 

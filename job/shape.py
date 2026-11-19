@@ -93,6 +93,32 @@ def items_of(full, items_up):
     return frozenset(names), len(gone)
 
 
+def mix_of(full, items_up):
+    """[gun, vitality, spirit]: integer percents of the souls of the build's distinct items (each counted once), by the slot and cost
+    the assets give (items_up[id] = [class name, shopable, slot g/v/s, cost]); largest remainder, so they sum to 100. None when no item
+    of the build has a known slot and a cost (unknown items, assets of an older state without them)."""
+    seen, tot = set(), {"g": 0, "v": 0, "s": 0}
+    for cat in (full.get("details") or {}).get("mod_categories") or ():
+        for mod in cat.get("mods") or ():
+            try:
+                iid = int(mod.get("ability_id"))
+            except (TypeError, ValueError):
+                continue
+            e = items_up.get(iid)
+            if iid in seen or not e or len(e) < 4 or e[2] not in tot:
+                continue
+            seen.add(iid)
+            tot[e[2]] += max(0, int(e[3] or 0))
+    total = sum(tot.values())
+    if total <= 0:
+        return None
+    raw = [100.0 * tot[k] / total for k in ("g", "v", "s")]
+    out = [int(x) for x in raw]
+    for i in sorted(range(3), key=lambda i: -(raw[i] - out[i]))[:100 - sum(out)]:
+        out[i] += 1
+    return out
+
+
 def _size(obj):
     return len(dumps(obj).encode("utf-8"))
 

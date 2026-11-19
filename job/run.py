@@ -296,7 +296,7 @@ def run(src, st, out, now, site_url="", history_dir=None, log=print, validate=Tr
             a_pts = rank.author_part(circle_of.get(m.get("author")), C)
             f = rank.fresh_part(int(m.get("upd") or 0), big_patch, s["last"] >= now - config.RECENT_DAYS * DAY, gone)
             return {"bid": b, "best": rank.best(s["use"], a_pts, f), "p": s["p"], "g": s["g"], "w": s["w"], "last": s["last"],
-                    "upd": int(m.get("upd") or 0), "author": m.get("author"), "a_pts": a_pts, "fresh": f}
+                    "tr": s["tr"], "upd": int(m.get("upd") or 0), "author": m.get("author"), "a_pts": a_pts, "fresh": f}
 
         # preliminary order without item penalties, then details for the top PRELIM of each circle (plan ruling 5)
         u0 = rank.aggregate(rows, circle_of, {}, now, published)
@@ -313,11 +313,12 @@ def run(src, st, out, now, site_url="", history_dir=None, log=print, validate=Tr
             lookup(h, unk)
         ensure([(h, b) for b in sorted(top | set(b for b in pop_ids if b in meta))])
         working.update("%d_%d" % (b, meta[b]["ver"]) for b in top | set(pop_ids) if b in meta)
-        items, gone = {}, {}
+        items, gone, mixes = {}, {}, {}
         for b in top:
             full = det(b)
             if full:
                 items[b], gone[b] = shape.items_of(full, items_up)
+                mixes[b] = shape.mix_of(full, items_up)
         alias = rank.dupes(items, meta)
         u = rank.aggregate(rows, circle_of, alias, now, published)
         games += u.games
@@ -338,6 +339,8 @@ def run(src, st, out, now, site_url="", history_dir=None, log=print, validate=Tr
                 if b in order[C]:
                     s = scored[C][b]
                     e = {"p": s["p"], "g": s["g"], "w": s["w"], "last": s["last"], "best": s["best"], "n": order[C].index(b) + 1}
+                    if s["p"]:
+                        e["tr"] = s["tr"]   # [players in the last 7 days, in the 7 days before]: the circle's trend (not per region)
                     if chips:
                         e["r"] = rank.regions_for(u, b, C, circle_of, now, rby, rby.get(a), s["a_pts"], s["fresh"])
                     use[C] = e
@@ -350,6 +353,8 @@ def run(src, st, out, now, site_url="", history_dir=None, log=print, validate=Tr
                     break
             r = shape.row(b, m, shape.author("", stand.get(a), rby.get(a), places.get(a, 0), u.plays.get(a, 0)), use, run_by,
                           {"old": 1 if int(m.get("upd") or 0) < big_patch else 0, "gone": gone.get(b, 0)})
+            if mixes.get(b):
+                r["mix"] = mixes[b]   # [gun, vitality, spirit] percents of the build's souls
             r["author"]["_a"] = a
             out_rows.append(r)
         # places within each region view, with the same author cap as the all-region list
@@ -364,6 +369,8 @@ def run(src, st, out, now, site_url="", history_dir=None, log=print, validate=Tr
             empty_ete += 1
         head = {"v": 1, "hero": h, "key": key, "gen": gen, "made": shape.iso(now), "season": {"name": w["cur"][2], "handover": w["handover"]},
                 "circles": counts, "cover": round(u.known / u.games, 3) if u.games else 0, "regions": chips}
+        if big_patch:
+            head["bigpatch"] = shape.ymd(big_patch)   # the last big patch's day: the pane's patch mark says since when
         lists[h] = dict(head, builds=out_rows)
         # Popular: the most played published builds of every rank, site builds tagged
         prows = []

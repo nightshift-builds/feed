@@ -48,10 +48,11 @@ def aggregate(rows, circle_of, alias, now, published):
         m[1] = max(m[1], t)
         if bid in published:
             u.known += 1
-            x = u.runs.setdefault(bid, {}).setdefault(a, [0, 0, 0])
+            x = u.runs.setdefault(bid, {}).setdefault(a, [0, 0, 0, 0])
             x[0] += 1
             x[1] += 1 if r.get("won") else 0
             x[2] = max(x[2], t)
+            x[3] = t if not x[3] else min(x[3], t)
     for a, d in per.items():
         u.main[a] = max(d.items(), key=lambda kv: (kv[1][0], kv[1][1], -kv[0]))[0]
     return u
@@ -65,8 +66,11 @@ def use_of(usage, bid, C, circle_of, now, region=None, region_of_acct=None):
     """{use, p, g, w, last} of build bid in circle C (runners: players whose circle is C or higher), optionally only the players of a
     region chip. use = sum of W[circle] * (1 if the build is the runner's main build here, else MAIN_OTHER) * (1 if their last game on
     it is within RECENT_DAYS, else RECENT_OLD)."""
-    use, p, g, w, last = 0.0, 0, 0, 0, 0
-    for a, (ga, wa, la) in (usage.runs.get(bid) or {}).items():
+    use, p, g, w, last, n7, b7 = 0.0, 0, 0, 0, 0, 0, 0
+    half = now - config.RECENT_DAYS * DAY
+    for a, x in (usage.runs.get(bid) or {}).items():
+        ga, wa, la = x[0], x[1], x[2]
+        fa = x[3] if len(x) > 3 and x[3] else la
         c = circle_of.get(a)
         if not _in(c, C):
             continue
@@ -78,7 +82,12 @@ def use_of(usage, bid, C, circle_of, now, region=None, region_of_acct=None):
         g += ga
         w += wa
         last = max(last, la)
-    return {"use": round(use, 6), "p": p, "g": g, "w": w, "last": last}
+        # the trend: players with a game in the last 7 days, and with one in the 7 days before (a player can count in both)
+        if la >= half:
+            n7 += 1
+        if fa < half:
+            b7 += 1
+    return {"use": round(use, 6), "p": p, "g": g, "w": w, "last": last, "tr": [n7, b7]}
 
 
 def author_part(author_circle, C):

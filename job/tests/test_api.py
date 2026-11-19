@@ -214,7 +214,7 @@ class Sources(unittest.TestCase):
                          "items": {"signature1": "ab_heal", "signature2": "ab_charge", "signature3": "ab_beefy", "signature4": "ab_leap"}},
                         {"id": 99, "class_name": "hero_test", "player_selectable": False, "disabled": False, "items": {}}]
             if path.endswith("/upgrade"):
-                return [{"id": 11, "class_name": "upgrade_clip_size", "shopable": True}, {"id": 12, "class_name": "upgrade_old", "shopable": False}]
+                return [{"id": 11, "class_name": "upgrade_clip_size", "shopable": True, "item_slot_type": "weapon", "cost": 800}, {"id": 12, "class_name": "upgrade_old", "shopable": False}]
             if path.endswith("/ability"):
                 return [{"id": 21, "class_name": "ab_heal"}, {"id": 22, "class_name": "ab_charge"}, {"id": 23, "class_name": "ab_beefy"},
                         {"id": 24, "class_name": "ab_leap"}]
@@ -224,7 +224,8 @@ class Sources(unittest.TestCase):
         self.assertEqual(a["heroes"][6]["key"], "atlas")
         self.assertEqual(a["heroes"][6]["slots"], {21: 1, 22: 2, 23: 3, 24: 4})
         self.assertNotIn(99, a["heroes"])
-        self.assertEqual(a["items_up"][11], ["upgrade_clip_size", True])
+        self.assertEqual(a["items_up"][11], ["upgrade_clip_size", True, "g", 800])   # slot and cost: the style mix
+        self.assertEqual(a["items_up"][12][2:], ["", 0])   # no slot or cost given
         self.assertEqual(a["items_ab"][24], "ab_leap")
         self.assertEqual(a["big_patch"], 1790713500)
 

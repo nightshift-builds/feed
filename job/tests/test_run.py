@@ -6,6 +6,7 @@ from pathlib import Path
 
 import publish
 import run
+import shape
 import state
 from tests import build_harness_site
 from tests.world import World, acct
@@ -75,6 +76,31 @@ class EndToEnd(Base):
                 self.assertTrue((self.d / "out" / "data" / "b" / ("%d_%d.json" % (r["id"], r["ver"]))).exists(), r["id"])
         names = {w.name_of(acct(i)) for i in range(1600)}
         self.assertFalse([l for l in self.lines if any(n in l for n in names)])
+
+    def test_style_trend_and_patch_date(self):
+        # the ledger's data: bigpatch on every hero list, mix on rows whose items the assets know (sums to 100), tr = [last 7 days,
+        # the 7 before] on each circle a row is in (never inside the region views, never on Popular)
+        w = World(NOW)
+        self.assertEqual(self.go(w), 0, "\n".join(self.lines))
+        ix = self.index()
+        mixed = trended = 0
+        for hid in ix["lists"]:
+            lst = self.hero(hid)
+            self.assertEqual(lst.get("bigpatch"), shape.ymd(w.big_patch))
+            for r in rows_of(lst):
+                if "mix" in r:
+                    mixed += 1
+                    self.assertEqual((len(r["mix"]), sum(r["mix"])), (3, 100), r["id"])
+                for C, e in r["use"].items():
+                    if e.get("p"):
+                        self.assertEqual(len(e["tr"]), 2, (r["id"], C))
+                        self.assertLessEqual(max(e["tr"]), e["p"])
+                        trended += 1
+                    self.assertFalse([x for x in (e.get("r") or {}).values() if "tr" in x])
+            for r in rows_of(self.hero(hid, popular=True)):
+                self.assertNotIn("tr", (r.get("use") or {}).get("all") or {})
+        self.assertGreater(mixed, 0)
+        self.assertGreater(trended, 0)
 
     def test_rules_in_output(self):
         w = World(NOW)

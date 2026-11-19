@@ -14,6 +14,18 @@ def full(cats, changes=None, desc="Rush <b>a</b>. {s:x}"):
             "details": {"mod_categories": cats, "ability_order": {"currency_changes": changes or []}}}
 
 
+class Mix(unittest.TestCase):
+    def test_mix_shares(self):
+        # [gun, vitality, spirit] percents of the souls of the build's distinct items (each once), by the assets' slot and cost;
+        # largest remainder, so they sum to 100: 500 / 1250 / 3000 of 4750 = 10.53 / 26.32 / 63.16 -> 11 / 26 / 63
+        up = {1: ["upgrade_a", True, "g", 500], 2: ["upgrade_b", True, "v", 1250], 3: ["upgrade_c", True, "s", 3000], 4: ["upgrade_d", True, "g", 0]}
+        f = full([{"mods": [{"ability_id": 1}, {"ability_id": 2}]}, {"mods": [{"ability_id": 3}, {"ability_id": 1}, {"ability_id": 4}, {"ability_id": 9}]}])
+        self.assertEqual(shape.mix_of(f, up), [11, 26, 63])
+        self.assertIsNone(shape.mix_of(f, UP))                       # assets without slot and cost (an older state): no mix
+        self.assertIsNone(shape.mix_of(full([{"mods": [{"ability_id": 9}]}]), up))   # no known item
+        self.assertEqual(shape.mix_of(full([{"mods": [{"ability_id": 3}]}]), up), [0, 0, 100])
+
+
 class Row(unittest.TestCase):
     def test_row_keys(self):
         m = {"ver": 4, "name": "<b>Fast</b> one", "lang": 8, "upd": 1794916800}
