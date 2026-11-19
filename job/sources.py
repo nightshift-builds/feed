@@ -170,13 +170,21 @@ def _when(s):
     return int(d.timestamp())
 
 
+def _int(v):
+    """An integer from an API value, 0 when it is none (a cost the API gives as text must not stop the run)."""
+    try:
+        return int(v or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def assets(api):
     """{heroes: {id: {key, slots: {ability item id: 1-4}}}, items_up: {id: [class_name, shopable, slot, cost]}, items_ab: {id: class_name},
     big_patch}. slot: g (weapon), v (vitality), s (spirit) or "" (the build's style mix, shape.mix_of). Heroes: the player-selectable ones
     that are not disabled (in-development heroes such as Baba included)."""
     slot = {"weapon": "g", "vitality": "v", "spirit": "s"}
     up = {int(i["id"]): [str(i.get("class_name") or ""), bool(i.get("shopable")), slot.get(str(i.get("item_slot_type") or ""), ""),
-                         int(i.get("cost") or 0)]
+                         _int(i.get("cost"))]
           for i in api.get("/v1/assets/items/by-type/upgrade", {}) or () if i.get("id") is not None}
     ab = {int(i["id"]): str(i.get("class_name") or "") for i in api.get("/v1/assets/items/by-type/ability", {}) or () if i.get("id") is not None}
     ab_id = {c: i for i, c in ab.items()}
