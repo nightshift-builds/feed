@@ -8,9 +8,7 @@ on:
     - cron: "23 * * * *"
   workflow_dispatch: {}
 permissions:
-  contents: write
-  pages: write
-  id-token: write
+  contents: read
 concurrency:
   group: pages
   cancel-in-progress: false
@@ -18,9 +16,8 @@ jobs:
   feed:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -56,5 +53,18 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
+  # The deploy runs in a job of its own, as in GitHub's Pages starter workflows: a deploy in the upload's own job can ask for
+  # the site artifact before it is listed. A failed deploy can then be re-run alone, without the hour's job.
+  deploy:
+    needs: feed
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
       - id: deploy
         uses: actions/deploy-pages@v4
