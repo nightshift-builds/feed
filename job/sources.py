@@ -178,6 +178,10 @@ def _int(v):
         return 0
 
 
+# the shape of assets(): raised when it changes, so a copy of another shape in the job's state is fetched again (run._assets)
+ASSETS_V = 2
+
+
 def assets(api):
     """{heroes: {id: {key, slots: {ability item id: 1-4}}}, items_up: {id: [class_name, shopable, slot, cost]}, items_ab: {id: class_name},
     big_patch}. slot: g (weapon), v (vitality), s (spirit) or "" (the build's style mix, shape.mix_of). Heroes: the player-selectable ones

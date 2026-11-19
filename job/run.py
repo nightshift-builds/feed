@@ -101,11 +101,11 @@ def _ints(d):
 
 def _assets(src, st, now):
     a = st.assets or {}
-    if a.get("data") and now - int(a.get("at") or 0) < config.ASSETS_TTL:
+    if a.get("data") and a.get("v") == sources.ASSETS_V and now - int(a.get("at") or 0) < config.ASSETS_TTL:
         d = a["data"]
     else:
         d = src.assets()
-        st.assets = {"at": now, "data": d}
+        st.assets = {"at": now, "v": sources.ASSETS_V, "data": d}
     heroes = {int(h): {"key": v["key"], "slots": _ints(v.get("slots"))} for h, v in d["heroes"].items()}
     return heroes, _ints(d["items_up"]), _ints(d["items_ab"]), int(d.get("big_patch") or 0)
 

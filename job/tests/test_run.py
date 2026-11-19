@@ -218,6 +218,18 @@ class LaterRuns(Base):
         haze = {r["id"]: r for r in rows_of(self.hero(13))}
         self.assertEqual(haze[413902]["ver"], w2.builds[413902]["version"])
 
+    def test_assets_of_an_older_shape_are_fetched_again(self):
+        # 19 Nov: assets cached before the items carried their slot and cost were kept for the day they live, so no row had a mix
+        self.assertEqual(self.go(World(NOW)), 0)
+        s = state.State(self.d / "state").load()
+        d = s.assets["data"]
+        s.assets = {"at": s.assets["at"], "data": dict(d, items_up={k: v[:2] for k, v in d["items_up"].items()})}
+        s.save()
+        w2 = World(NOW + 3600)
+        self.assertEqual(self.go(w2), 0, "\n".join(self.lines))
+        self.assertIn("assets", [c[0] for c in w2.calls])
+        self.assertTrue(any(r.get("mix") for r in rows_of(self.hero(13))))
+
     def test_prev_season_kept_in_state(self):
         w1 = World(NOW)
         self.assertEqual(self.go(w1), 0)
