@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<!-- only this inline script runs; it may fetch from this site only (the feed's JSON next to this page) -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; connect-src 'self'">
+<meta name="robots" content="noindex">
+<link rel="icon" href="data:,">
+<title>NSF1|init</title>
+</head>
+<body>
+<p>Nightshift HUD builds relay. It only does something inside Deadlock.</p>
+<script>
+// Nightshift HUD builds relay, protocol NSF1 (docs/superpowers/specs/2026-11-17-builds-feed-design.md, section 6).
+// The mod's hidden CitadelHTMLPanel loads this page while its Builds page shows and sends each command in the URL fragment:
+//   #nsf=encodeURIComponent(JSON {p: 1, q: message id, op: "hero" | "popular" | "build" | "resend", hero?: hero key, id?, ver?, of?, parts?})
+// read on the first load and on every hashchange (a fragment never reaches the server). The answer travels as page titles:
+//   "NSF1|ready" once loaded; "NSF1|<q>|<i>/<n>|<chunk>" (i from 0, chunks of at most CHUNK characters, GAP_MS apart);
+//   "NSF1|<q>|err|<code>" (offline, http_<status>, bad_json, no_hero, gone).
+// The joined chunks are JSON {gen, at (ms the data was fetched), stale (0 | 1), d (the data file)}. Data files: data/index.json, then
+// data/<gen>/<hero id>.json, data/<gen>/popular/<hero id>.json or data/b/<build id>_<version>.json. Answers are kept in localStorage
+// (the last 12 hero lists, 12 popular lists, 30 builds), and a failed fetch answers the kept copy marked stale. "resend" sends parts of
+// an answer again (kept KEEP_MS) under a new message id. Written for the Steam client's CEF (Chromium 126).
+(function () {
+	"use strict";
+	var PROTO = "NSF1", CHUNK = 3000, GAP_MS = 15, KEEP_MS = 60000, LS = "nsf.", LRU = { hero: 12, popular: 12, build: 30 };
+	if (window.top !== window.self) { return; }   // never act inside someone else's frame
+	var store = null;
+	try {
+		localStorage.setItem(LS + "probe", "1");
+		localStorage.removeItem(LS + "probe");
+		store = localStorage;
+	} catch (e) {
+		store = null;   // no cache: every answer is fetched
+	}
+	var queue = [], sending = false, kept = {}, seen = {}, seenList = [];
+
+	// ---- titles, GAP_MS apart
+	function pump() {
+		if (!queue.length) { sending = false; return; }
+		sending = true;
+		document.title = queue.shift();
+		setTimeout(pump, GAP_MS);
+	}
+	function push(titles) {
+		for (var i = 0; i < titles.length; i++) { queue.push(titles[i]); }
+		if (!sending) { pump(); }
+	}
+	function split(s) {
+		var parts = [];
+		for (var i = 0; i < s.length;) {
+			var e = Math.min(i + CHUNK, s.length), c = s.charCodeAt(e - 1);
+			if (e < s.length && c >= 0xD800 && c <= 0xDBFF) { e--; }   // a surrogate pair stays in one chunk
+			parts.push(s.slice(i, e));
+			i = e;
+		}
+		return parts.length ? parts : [""];
+	}
+	function title(q, i, n, chunk) { return PROTO + "|" + q + "|" + i + "/" + n + "|" + chunk; }
+	function answer(q, text) {
+		var parts = split(text), out = [];
+		kept[q] = parts;
+		setTimeout(function () { delete kept[q]; }, KEEP_MS);
+		for (var i = 0; i < parts.length; i++) { out.push(title(q, i, parts.length, parts[i])); }
+		push(out);
+	}
+	function fail(q, code) { push([PROTO + "|" + q + "|err|" + code]); }
+	function envelope(entry, stale) { return JSON.stringify({ gen: entry.gen, at: entry.at, stale: stale ? 1 : 0, d: entry.d }); }
+
+	// ---- the page's own copies, least recently used out first
+	function lru() {
+		var o = null;
+		try { o = JSON.parse(store.getItem(LS + "lru") || "null"); } catch (e) { o = null; }
+		return o && typeof o === "object" ? o : {};
+	}
+	function touch(op, key, drop) {
+		var o = lru(), list = (o[op] || []).filter(function (k) { return k !== key; });
+		if (!drop) { list.push(key); }
+		while (list.length > LRU[op]) {
+			var old = list.shift();
+			try { store.removeItem(LS + op + "." + old); } catch (e) { }
+		}
+		o[op] = list;
+		try { store.setItem(LS + "lru", JSON.stringify(o)); } catch (e) { }
+	}
+	function get(op, key) {
+		if (!store) { return null; }
+		var v = null;
+		try { v = JSON.parse(store.getItem(LS + op + "." + key) || "null"); } catch (e) { v = null; }
+		if (!v || typeof v !== "object" || !("d" in v)) { return null; }
+		touch(op, key);
+		return v;
+	}
+	function put(op, key, d, gen) {
+		var entry = { at: Date.now(), gen: gen, d: d };
+		if (!store) { return entry; }
+		var text = JSON.stringify(entry);
+		for (var tries = 0; tries < 3; tries++) {
+			try {
+				store.setItem(LS + op + "." + key, text);
+				touch(op, key);
+				return entry;
+			} catch (e) {
+				var o = lru(), list = o[op] || [];   // full: the oldest copies of this kind go first
+				if (!list.length) { break; }
+				touch(op, list[0], true);
+			}
+		}
+		return entry;
+	}
+
+	// ---- fetching (same site only)
+	function load(url) {
+		return fetch(url).then(function (r) {
+			if (!r.ok) { throw { code: "http_" + r.status }; }
+			return r.text();
+		}, function () {
+			throw { code: "offline" };
+		}).then(function (t) {
+			try { return JSON.parse(t); } catch (e) { throw { code: "bad_json" }; }
+		});
+	}
+	function code(x) { return x && typeof x.code === "string" ? x.code : "offline"; }
+
+	function list(m) {
+		var key = String(m.hero || "");
+		function stale(x) {
+			var c = get(m.op, key);
+			if (c) { answer(m.q, envelope(c, true)); } else { fail(m.q, code(x)); }
+		}
+		load("data/index.json?t=" + Math.floor(Date.now() / 60000)).then(function (ix) {
+			var id = ix && ix.heroes ? ix.heroes[key] : undefined;
+			if (id === undefined || id === null) { fail(m.q, "no_hero"); return; }
+			var c = get(m.op, key);
+			if (c && c.gen === ix.gen) { answer(m.q, envelope(c, false)); return; }
+			var path = "data/" + ix.gen + "/" + (m.op === "popular" ? "popular/" : "") + Number(id) + ".json?g=" + encodeURIComponent(ix.gen);
+			load(path).then(function (d) { answer(m.q, envelope(put(m.op, key, d, ix.gen), false)); }, stale);
+		}, stale);
+	}
+	function build(m) {
+		var key = Number(m.id) + "_" + Number(m.ver);
+		var c = get("build", key);
+		if (c) { answer(m.q, envelope(c, false)); return; }   // a build version never changes
+		load("data/b/" + key + ".json").then(function (d) { answer(m.q, envelope(put("build", key, d, ""), false)); },
+			function (x) { fail(m.q, code(x)); });
+	}
+	function resend(m) {
+		var parts = kept[String(m.of)];
+		if (!parts) { fail(m.q, "gone"); return; }
+		var want = Array.isArray(m.parts) ? m.parts : [], out = [];
+		for (var i = 0; i < want.length; i++) {
+			var k = Number(want[i]);
+			if (k >= 0 && k < parts.length) { out.push(title(m.q, k, parts.length, parts[k])); }
+		}
+		push(out);
+	}
+
+	function onHash() {
+		var h = String(location.hash || ""), m = null;
+		if (h.indexOf("#nsf=") !== 0) { return; }
+		try { m = JSON.parse(decodeURIComponent(h.slice(5))); } catch (e) { return; }
+		if (!m || m.p !== 1 || typeof m.q !== "string" || !m.q || seen[m.q]) { return; }
+		seen[m.q] = true;
+		seenList.push(m.q);
+		if (seenList.length > 200) { delete seen[seenList.shift()]; }
+		if (m.op === "hero" || m.op === "popular") { list(m); }
+		else if (m.op === "build") { build(m); }
+		else if (m.op === "resend") { resend(m); }
+	}
+	window.addEventListener("hashchange", onHash);
+	push([PROTO + "|ready"]);
+	onHash();   // the first command rides in the first load's fragment
+})();
+</script>
+</body>
+</html>

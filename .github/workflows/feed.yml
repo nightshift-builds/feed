@@ -1,0 +1,60 @@
+# Nightshift HUD builds feed: the hourly job and the GitHub Pages deploy (spec docs/superpowers/specs/2026-11-17-builds-feed-design.md 5.7
+# in the mod's repository; README.md next to job/ and site/). It runs only in the organization's repository, whose root is this feed/
+# folder; inside the mod's repository it sits one level too deep for GitHub to run it.
+# Pin the actions to the majors current when publishing (README "Publishing").
+name: feed
+on:
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch: {}
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: false
+jobs:
+  feed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Restore the job's private state (metadata, names, regions, the last lists)
+        uses: actions/cache/restore@v4
+        with:
+          path: state
+          key: feed-state-${{ github.run_id }}
+          restore-keys: feed-state-
+      - name: Tests
+        run: python -I -m unittest discover -s job/tests -t job
+      - name: Run the job (exit 1 = validation failed: nothing deployed, the last deploy stays live)
+        env:
+          DEADLOCK_API_KEY: ${{ secrets.DEADLOCK_API_KEY }}
+        run: python -I job/run.py --out _site --state state --site-url "https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/" --history data/history
+      - name: Keep the job's private state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state
+          key: feed-state-${{ github.run_id }}
+      - name: Commit the daily snapshot (build ids and counts only; it also keeps the schedule alive)
+        run: |
+          if [ -n "$(git status --porcelain -- data/history)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add data/history
+            git commit -m "data: daily snapshot"
+            git push
+          fi
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deploy
+        uses: actions/deploy-pages@v4
