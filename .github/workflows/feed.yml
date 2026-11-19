@@ -26,25 +26,25 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Restore the job's private state (metadata, names, regions, the last lists)
+      - name: "Restore the job's private state (metadata, names, regions, the last lists)"
         uses: actions/cache/restore@v4
         with:
           path: state
           key: feed-state-${{ github.run_id }}
           restore-keys: feed-state-
-      - name: Tests
+      - name: "Tests"
         run: python -I -m unittest discover -s job/tests -t job
-      - name: Run the job (exit 1 = validation failed: nothing deployed, the last deploy stays live)
+      - name: "Run the job (exit 1 means validation failed, nothing deployed, the last deploy stays live)"
         env:
           DEADLOCK_API_KEY: ${{ secrets.DEADLOCK_API_KEY }}
         run: python -I job/run.py --out _site --state state --site-url "https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/" --history data/history
-      - name: Keep the job's private state
+      - name: "Keep the job's private state"
         if: always()
         uses: actions/cache/save@v4
         with:
           path: state
           key: feed-state-${{ github.run_id }}
-      - name: Commit the daily snapshot (build ids and counts only; it also keeps the schedule alive)
+      - name: "Commit the daily snapshot (build ids and counts only, it also keeps the schedule alive)"
         run: |
           if [ -n "$(git status --porcelain -- data/history)" ]; then
             git config user.name "github-actions[bot]"
