@@ -1,5 +1,5 @@
 """The pool's games from deadlock-api's data lake (data.deadlock-api.com): match_player as parquet files, listed in a manifest and read
-with DuckDB over HTTP. Only the columns asked for travel (20 Nov: an hour of every game's six columns was 1.5 MB of a 250 MB file),
+with pyarrow over HTTP range requests. Only the columns asked for travel (20 Nov: an hour of every game's six columns was 1.5 MB of a 250 MB file),
 and the lake has no request or read budget, unlike GraphQL (charged by the data it reads since 19 Nov).
 
 The manifest's files: "base" files hold a match_id range each ("partition" = match_id // 1,000,000; a partition's files in match_id
@@ -7,8 +7,10 @@ order), "delta" and "residual" files hold what came in a time span. Every file h
 window was created after it started, so it lies in a base file of a partition the window reaches, or in a delta / residual file whose
 hi is in the window. A run reads the files whose hi is past the last one read (the state's "wm"); a game read twice keeps one row
 (the caller keys games by match and account). A new generation of the lake reads the window again."""
+import io
 import json
 import re
+import time
 import urllib.request
 
 import api as api_mod
@@ -16,8 +18,7 @@ import api as api_mod
 LAKE = "https://data.deadlock-api.com"
 MANIFEST = LAKE + "/v1/manifest.json"
 TABLE = "match_player"
-BATCH = 6           # files per query: a failed query loses at most this many, the ones before it are kept; residual files run
-                    # to 3 million rows (4.7 GB whole) and a runner has 16 GB
+BATCH = 6           # files per batch: a failed read loses at most this many, the ones before it are kept
 GAME_NORMAL = "Normal"
 
 
@@ -99,43 +100,154 @@ def manifest(ua, timeout=60):
         raise api_mod.ApiError("lake manifest: " + type(e).__name__, 0)
 
 
+class HttpFile(io.RawIOBase):
+    """A lake file read by HTTP range requests: pyarrow asks for the footer and then for each column chunk it needs (coalescing only
+    ranges a few KB apart), so a residual file's 25 MB of the six columns come without its 4.7 GB."""
+
+    def __init__(self, url, ua, timeout=60, tries=3):
+        super().__init__()
+        self.url, self.ua, self.timeout, self.tries = url, ua, timeout, tries
+        self.pos, self.got, self.calls = 0, 0, 0
+        req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": ua})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            self.size = int(r.headers["Content-Length"])
+
+    def readable(self):
+        return True
+
+    def seekable(self):
+        return True
+
+    def tell(self):
+        return self.pos
+
+    def seek(self, off, whence=io.SEEK_SET):
+        self.pos = off if whence == io.SEEK_SET else self.pos + off if whence == io.SEEK_CUR else self.size + off
+        return self.pos
+
+    def readinto(self, b):
+        n = min(len(b), self.size - self.pos)
+        if n <= 0:
+            return 0
+        req = urllib.request.Request(self.url, headers={"User-Agent": self.ua, "Range": "bytes=%d-%d" % (self.pos, self.pos + n - 1)})
+        for attempt in range(self.tries):
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                    if r.status != 206:
+                        raise OSError("range answered %d" % r.status)
+                    data = r.read()
+                break
+            except OSError:
+                if attempt + 1 == self.tries:
+                    raise
+                time.sleep(2 ** attempt)
+        b[:len(data)] = data
+        self.pos += len(data)
+        self.got += len(data)
+        self.calls += 1
+        return len(data)
+
+
+COLS = ["match_id", "account_id", "hero_id", "hero_build_id", "won", "start_time", "game_mode"]
+
+
 class Reader:
-    """DuckDB over HTTP (imported here only: the job's tests run without it)."""
+    """pyarrow over HTTP range requests (imported here only: the job's tests run without it). Row groups whose start_time
+    statistics end before the window are skipped without being read."""
 
-    def __init__(self):
-        import duckdb
-        import tempfile
-        self.con = duckdb.connect()
-        self.con.execute("INSTALL httpfs")
-        self.con.execute("LOAD httpfs")
-        # 20 Nov: the first fill ran out of memory on a runner: a residual file's row group is about 790 MB and the six columns sit at
-        # its start and 240 MB in, and the parquet prefetch read the span between them in one piece (an allocation of 3.5 GiB).
-        # Without the prefetch each column chunk is read on its own. Also fewer threads, no insertion order, room to spill to disk.
-        for q in ("SET disable_parquet_prefetching = true", "SET threads = 2", "SET preserve_insertion_order = false",
-                  "SET memory_limit = '6GB'",
-                  "SET temp_directory = '%s'" % tempfile.mkdtemp(prefix="lake_").replace("\\", "/").replace("'", "")):
-            self.con.execute(q)
+    def __init__(self, ua="NightshiftBuilds/1"):
+        import pyarrow  # noqa: F401  (fails here, before any file, when it is missing)
+        self.ua = ua
+        self.bytes = 0
+        self.calls = 0
 
-    def url(self, key):
-        return LAKE + "/" + key
+    def _open(self, key):
+        import pyarrow.parquet as pq
+        f = HttpFile(LAKE + "/" + key, self.ua)
+        return f, pq.ParquetFile(f, pre_buffer=True)
+
+    def _done(self, f):
+        self.bytes += f.got
+        self.calls += f.calls
+
+    @staticmethod
+    def _col(md, name):
+        for i in range(md.num_columns):
+            if md.schema.column(i).path == name:
+                return i
+        return None
+
+    @staticmethod
+    def _epoch(v):
+        """A statistics value (a datetime, or an integer in the column's unit) in unix seconds."""
+        if v is None:
+            return None
+        if hasattr(v, "timestamp"):
+            return int(v.timestamp())
+        v = int(v)
+        return v // 1_000_000 if v > 10 ** 14 else v // 1000 if v > 10 ** 11 else v
+
+    def _row_groups(self, md, since):
+        c = self._col(md, "start_time")
+        out = []
+        for g in range(md.num_row_groups):
+            st = md.row_group(g).column(c).statistics if c is not None else None
+            mx = self._epoch(st.max_raw) if st is not None and st.has_min_max else None
+            if mx is None or mx >= since:
+                out.append(g)
+        return out
+
+    @staticmethod
+    def _secs(col):
+        """A timestamp column in unix seconds (int64)."""
+        import pyarrow as pa
+        import pyarrow.compute as pc
+        unit = getattr(col.type, "unit", "s")
+        raw = pc.cast(col, pa.int64())
+        return raw if unit == "s" else pc.divide(raw, {"ms": 1000, "us": 10 ** 6, "ns": 10 ** 9}[unit])
 
     def latest_start(self, key):
-        r = self.con.execute("SELECT max(stats_max_value) FROM parquet_metadata(?) WHERE path_in_schema = 'start_time'",
-                             [self.url(key)]).fetchone()
-        if not r or not r[0]:
-            return 0
-        t = self.con.execute("SELECT epoch(?::TIMESTAMPTZ)::BIGINT", [r[0]]).fetchone()
-        return int(t[0]) if t and t[0] is not None else 0
+        f, pf = self._open(key)
+        try:
+            md, best = pf.metadata, 0
+            c = self._col(md, "start_time")
+            for g in range(md.num_row_groups):
+                st = md.row_group(g).column(c).statistics if c is not None else None
+                if st is not None and st.has_min_max:
+                    best = max(best, self._epoch(st.max_raw) or 0)
+            return best
+        finally:
+            self._done(f)
 
     def games(self, keys, ids, since):
         """[{match_id, account_id, hero_id, hero_build_id, won, start_time}] of the pool's Normal games from `since` in these files."""
-        self.con.execute("CREATE OR REPLACE TEMP TABLE pool AS SELECT unnest(?::BIGINT[]) AS id", [sorted(int(i) for i in ids)])
-        rows = self.con.execute(
-            "SELECT match_id, account_id, hero_id, hero_build_id, won, epoch(start_time)::BIGINT FROM read_parquet(?, union_by_name = true) "
-            "WHERE game_mode = ? AND start_time >= to_timestamp(?) AND account_id IN (SELECT id FROM pool)",
-            [[self.url(k) for k in keys], GAME_NORMAL, int(since)]).fetchall()
-        return [{"match_id": int(r[0]), "account_id": int(r[1]), "hero_id": int(r[2]), "hero_build_id": int(r[3]) if r[3] else None,
-                 "won": bool(r[4]), "start_time": int(r[5])} for r in rows]
+        import pyarrow as pa
+        import pyarrow.compute as pc
+        pool = pa.array(sorted(int(i) for i in ids), type=pa.int64())
+        out = []
+        for key in keys:
+            f, pf = self._open(key)
+            try:
+                groups = self._row_groups(pf.metadata, since)
+                if not groups:
+                    continue
+                t = pf.read_row_groups(groups, columns=COLS)
+                gm = t["game_mode"]
+                if pa.types.is_dictionary(gm.type):
+                    gm = gm.cast(pa.string())
+                mask = pc.and_(pc.and_(pc.equal(gm, GAME_NORMAL), pc.greater_equal(self._secs(t["start_time"]), int(since))),
+                               pc.is_in(pc.cast(t["account_id"], pa.int64()), value_set=pool))
+                t = t.filter(mask)
+                st = self._secs(t["start_time"]).to_pylist()
+                cols = {c: t[c].to_pylist() for c in ("match_id", "account_id", "hero_id", "hero_build_id", "won")}
+                for i in range(t.num_rows):
+                    b = cols["hero_build_id"][i]
+                    out.append({"match_id": int(cols["match_id"][i]), "account_id": int(cols["account_id"][i]),
+                                "hero_id": int(cols["hero_id"][i]), "hero_build_id": int(b) if b else None,
+                                "won": bool(cols["won"][i]), "start_time": int(st[i])})
+            finally:
+                self._done(f)
+        return out
 
 
 def pool_games(ids, since, lk, ua, reader=None, man=None):
@@ -145,7 +257,7 @@ def pool_games(ids, since, lk, ua, reader=None, man=None):
     gen, files = files_of(man)
     lk = dict(lk or {})
     wm = int(lk.get("wm") or 0) if int(lk.get("gen") or 0) == gen else 0
-    rd = reader or Reader()
+    rd = reader or Reader(ua)
     try:
         p0 = first_partition(files, since, rd.latest_start, lk.get("p0"))
         todo = select(files, since, wm, p0)
@@ -155,10 +267,10 @@ def pool_games(ids, since, lk, ua, reader=None, man=None):
             return
         for k in range(0, len(todo), BATCH):
             got = rd.games([f["key"] for f in todo[k:k + BATCH]], ids, since)
-            state = dict(state, wm=wm_after(todo, min(len(todo), k + BATCH), wm))
+            state = dict(state, wm=wm_after(todo, min(len(todo), k + BATCH), wm), mb=round(getattr(rd, "bytes", 0) / 1e6, 1))
             yield got, state
     except api_mod.ApiError:
         raise
-    except Exception as e:      # duckdb's errors (HTTP, a file gone after a fold, memory) end the fetch the way an API error does
+    except Exception as e:      # HTTP errors, a file gone after a fold, pyarrow's errors: they end the read the way an API error does
         # its text names a file, a size or a setting, never a player: kept short for the log
         raise api_mod.ApiError("lake: %s: %s" % (type(e).__name__, " ".join(str(e).split())[:240]), 0)

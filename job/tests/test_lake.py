@@ -86,7 +86,7 @@ class TestPoolGames(unittest.TestCase):
         out = list(lake.pool_games({7}, 100, {}, "t", reader=rd, man=self.man(files)))
         self.assertEqual(len(rd.batches), -(-51 // lake.BATCH))     # 51 files in the window (hi 100..600)
         self.assertEqual(sum(len(g) for g, _ in out), 51)     # account 8 is not in the pool
-        self.assertEqual(out[-1][1], {"gen": 3, "wm": 600, "p0": None, "files": 51})
+        self.assertEqual(out[-1][1], {"gen": 3, "wm": 600, "p0": None, "files": 51, "mb": 0.0})
 
     def test_a_failed_batch_keeps_the_ones_before(self):
         files = [delta(i * 10, i * 10 + 10) for i in range(1, 60)]

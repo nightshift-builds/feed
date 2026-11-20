@@ -131,7 +131,7 @@ def _pool_games(src, st, pool_ids, now, log):
             keep()
             nb += 1
             if nb == 1 or nb % 5 == 0:
-                log("feed: lake: %d batches, %d games so far (%.0f s)" % (nb, got, time.time() - t0))
+                log("feed: lake: %d batches, %d games so far, %.0f MB (%.0f s)" % (nb, got, float(lk.get("mb") or 0), time.time() - t0))
     except api_mod.ApiError as e:
         keep()
         wm = int(lk.get("wm") or 0)
@@ -141,8 +141,8 @@ def _pool_games(src, st, pool_ids, now, log):
         log("feed: pool games not read after %.1f h ago (%s): the games up to then are used" % ((now - wm) / 3600.0, e))
     else:
         keep()
-        log("feed: pool games: %d read from %d lake files (%s), %d new, %d in the window, lake %.1f h behind" % (
-            got, int(lk.get("files") or 0), "the whole window" if not int((have.get("lake") or {}).get("wm") or 0) else "since the last run", len(games) - n0, len(games),
+        log("feed: pool games: %d read from %d lake files, %.0f MB (%s), %d new, %d in the window, lake %.1f h behind" % (
+            got, int(lk.get("files") or 0), float(lk.get("mb") or 0), "the whole window" if not int((have.get("lake") or {}).get("wm") or 0) else "since the last run", len(games) - n0, len(games),
             (now - int(lk.get("wm") or now)) / 3600.0))
     pool = set(pool_ids)
     by = {}

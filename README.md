@@ -6,7 +6,7 @@ in the mod's repository. This folder is the future organization repository: its 
 
 ## What runs where
 
-- `job/` (Python 3.12: the standard library and DuckDB, for the data lake) runs every hour in GitHub Actions (`.github/workflows/feed.yml`), started at :23 by an
+- `job/` (Python 3.12: the standard library and pyarrow, for the data lake) runs every hour in GitHub Actions (`.github/workflows/feed.yml`), started at :23 by an
   outside scheduler (cron-job.org) through the API's `workflow_dispatch`, also by hand. The scheduler holds a fine-grained token
   (this repository, Actions: read and write) that expires after a year: renew it there. It reads deadlock-api (api.deadlock-api.com)
   only, and writes the static site `_site/`:
@@ -19,8 +19,8 @@ in the mod's repository. This folder is the future organization repository: its 
   Each deploy keeps the previous generation's lists too.
 - The job's private state (build metadata, player names and regions, the pool's games of the last 14 days, the last run's lists
   and stats) lives in the Actions cache (`state/`). It is never published: it holds account ids.
-- The pool's games come from deadlock-api's data lake (data.deadlock-api.com: match_player as hourly parquet files), read with DuckDB
-  over HTTP: only the six columns asked for travel, and the lake has no request or read budget. GraphQL is charged by the data it
+- The pool's games come from deadlock-api's data lake (data.deadlock-api.com: match_player as hourly parquet files), read with pyarrow
+  over HTTP range requests: only the column chunks asked for travel (a 4.7 GB file gives 25 MB), and the lake has no request or read budget. GraphQL is charged by the data it
   reads since 19 Nov (10 GB an hour per IP), which the 14-day games query could not stay under. The job keeps the pool's games in
   its state with the lake's watermark and reads only the files that came since the last run (a few MB); the first fill reads the
   whole window once (20 Nov: about 160 files, 470 MB, carried on by the next run if it is cut short). The lake runs an hour or two
