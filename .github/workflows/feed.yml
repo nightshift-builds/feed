@@ -30,6 +30,9 @@ jobs:
           path: state
           key: feed-state-${{ github.run_id }}
           restore-keys: feed-state-
+      # DuckDB reads the pool's games from deadlock-api's data lake (job/lake.py); the rest of the job is the standard library
+      - name: "DuckDB"
+        run: python -m pip install --disable-pip-version-check duckdb==2.0.0
       - name: "Tests"
         run: python -I -m unittest discover -s job/tests -t job
       - name: "Run the job (exit 1 means validation failed, nothing deployed, the last deploy stays live)"

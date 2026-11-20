@@ -266,23 +266,23 @@ class LaterRuns(Base):
         self.assertTrue(any("validation" in l for l in self.lines))
 
     def test_pool_games_kept_between_runs(self):
-        # 20 Nov: the pool's games of the window live in the state; a later run fetches the hours since the last one (and the last
-        # ROWS_OVERLAP again, for matches the API processes late), never the whole window again
+        # 20 Nov: the pool's games of the window live in the state with the data lake's watermark; a later run reads only the lake
+        # files that came since, never the whole window again
         w1 = World(NOW)
         self.assertEqual(self.go(w1), 0)
-        first = [c for c in w1.calls if c[0] == "pool_rows"]
-        self.assertEqual((min(c[1] for c in first), max(c[2] for c in first)), (NOW - config.WINDOW_DAYS * DAY, NOW))
-        self.assertTrue(all(c[2] - c[1] <= config.ROWS_SLICE for c in first))
+        first = [c for c in w1.calls if c[0] == "pool_lake"]
+        self.assertEqual(first, [("pool_lake", NOW - config.WINDOW_DAYS * DAY, {})])
         kept = state.State(self.d / "state").load().rows
-        self.assertEqual(kept["until"], NOW)
+        self.assertEqual((kept["until"], kept["lake"]["wm"]), (NOW, NOW))
         self.assertGreater(len(kept["rows"]), 1000)
         w2 = World(NOW + 3600)
         self.assertEqual(self.go(w2), 0, "\n".join(self.lines))
-        second = [c for c in w2.calls if c[0] == "pool_rows"]
-        self.assertEqual((min(c[1] for c in second), max(c[2] for c in second)), (NOW - config.ROWS_OVERLAP, NOW + 3600))
+        second = [c for c in w2.calls if c[0] == "pool_lake"]
+        self.assertEqual(second[0][2]["wm"], NOW)
         rows = state.State(self.d / "state").load().rows["rows"]
-        self.assertEqual(len({(r[0], r[1]) for r in rows}), len(rows))     # the overlap brings no game twice
+        self.assertEqual(len({(r[0], r[1]) for r in rows}), len(rows))
         self.assertTrue(all(r[5] >= NOW + 3600 - config.WINDOW_DAYS * DAY for r in rows))
+        self.assertTrue(any("since the last run" in l for l in self.lines), "\n".join(self.lines))
 
     def test_pool_games_from_the_state_when_the_fetch_fails(self):
         self.assertEqual(self.go(World(NOW)), 0)
@@ -291,22 +291,21 @@ class LaterRuns(Base):
         ix = self.index()
         self.assertNotEqual(ix["gen"], gen1)
         self.assertEqual(ix["carried"], [])
-        self.assertTrue(any("pool games not fetched" in l for l in self.lines), "\n".join(self.lines))
-        self.assertEqual(state.State(self.d / "state").load().rows["until"], NOW)
+        self.assertTrue(any("pool games not read" in l for l in self.lines), "\n".join(self.lines))
+        self.assertEqual(state.State(self.d / "state").load().rows["lake"]["wm"], NOW)
 
-    def test_whole_window_fetch_goes_on_from_where_it_stopped(self):
-        # the first fill reads the whole window (about 6-8 GB without a key, over the per-minute budget): windows that came are kept,
-        # so a run cut short by the API leaves the next one only the rest
-        w1 = World(NOW, fail_pool_rows_after=10)      # the made-up games start 13.3 days back: 60 hours of windows hold some
+    def test_whole_window_read_goes_on_from_where_it_stopped(self):
+        # the first fill reads the whole window (about 160 lake files): batches that came are kept, so a run cut short leaves the
+        # next one only the rest
+        w1 = World(NOW, fail_pool_rows_after=10)
         with self.assertRaises(run.api_mod.ApiError):
             self.go(w1)
         since = NOW - config.WINDOW_DAYS * DAY
         kept = state.State(self.d / "state").load().rows
-        self.assertEqual(kept["until"], since + 10 * config.ROWS_SLICE)
-        self.assertGreater(len(kept["rows"]), 0)
+        self.assertEqual(kept["lake"]["wm"], since - 1 + 10 * 6 * 3600)
         w2 = World(NOW)
         self.assertEqual(self.go(w2), 0, "\n".join(self.lines))
-        self.assertEqual(min(c[1] for c in w2.calls if c[0] == "pool_rows"), since + 10 * config.ROWS_SLICE - config.ROWS_OVERLAP)
+        self.assertEqual([c[2]["wm"] for c in w2.calls if c[0] == "pool_lake"], [since - 1 + 10 * 6 * 3600])
 
     def test_stale_pool_games_stop_the_run(self):
         # games older than ROWS_STALE (or none) and a failed fetch: nothing is rebuilt, the last deploy stays live (main: exit 2)

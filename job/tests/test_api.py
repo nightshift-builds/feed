@@ -174,34 +174,6 @@ class Sources(unittest.TestCase):
         sources.scoreboard(f, 0, 7200)
         self.assertEqual(len(f.gets), 1)
 
-    def test_pool_rows_every_hero_one_window(self):
-        # 20 Nov: the read is charged by the time range scanned, so every hero comes in one query per window, and a full page
-        # (10,000 rows) splits its window in two halves instead of paging by offset (each offset page scans the window again)
-        calls = []
-
-        def g(q):
-            calls.append(q)
-            n = 10000 if len(calls) == 1 else 7
-            return {"match_players": [{"match_id": len(calls), "account_id": 1, "hero_id": 6, "hero_build_id": 5, "won": True,
-                                       "start_time": 1500}] * n}
-        f = FakeApi(gql=g)
-        rows = sources.pool_rows(f, [3, 1, 2], 1000, 8200)
-        self.assertEqual((len(rows), len(calls)), (14, 3))
-        self.assertIn("account_id: {in: [1, 2, 3]}", calls[0])
-        self.assertIn('game_mode: {eq: "Normal"}', calls[0])
-        self.assertIn("start_time: {gte: 1000, lt: 8200}", calls[0])
-        self.assertNotIn("hero_id: {eq:", calls[0])
-        self.assertNotIn("offset", calls[0])
-        self.assertIn("match_id account_id hero_id hero_build_id won start_time", calls[0])
-        halves = sorted(re.search(r"gte: (\d+), lt: (\d+)", q).groups() for q in calls[1:])
-        self.assertEqual(halves, [("1000", "4600"), ("4600", "8200")])
-
-    def test_pool_rows_short_window_keeps_its_full_page(self):
-        f = FakeApi(gql=lambda q: {"match_players": [{"match_id": 1, "account_id": 1, "hero_id": 6, "hero_build_id": 5, "won": True,
-                                                       "start_time": 1500}] * 10000})
-        rows = sources.pool_rows(f, [1], 1000, 1000 + 1800)
-        self.assertEqual((len(rows), len(f.gqls)), (10000, 1))
-
     def test_details_batches(self):
         pairs = [(18, 1000 + i) for i in range(45)]
 

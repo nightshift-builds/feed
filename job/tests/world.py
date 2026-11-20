@@ -234,13 +234,25 @@ class World:
         out = [(acct(i), self.badge(i) if not 1500 <= i < 1550 else 101, 70000 - i * 3) for i in range(self.n_pool)]
         return out + [(LOW0 + i, 95, 30000 - i) for i in range(300)]
 
-    def pool_rows(self, ids, t0, t1):
-        self._call("pool_rows", t0, t1)
-        n = sum(1 for c in self.calls if c[0] == "pool_rows")
-        if self.fail_pool_rows or (self.fail_pool_rows_after is not None and n > self.fail_pool_rows_after):
-            raise api_mod.ApiError("http 504", 504)
+    def pool_lake(self, ids, since, lk):
+        """lake.pool_games over the made-up games: a game's lake time is its start; one batch per 6 hours of lake time since the
+        state's watermark (the whole window on a first read), each batch a call."""
+        self._call("pool_lake", since, dict(lk or {}))
+        if self.fail_pool_rows:
+            raise api_mod.ApiError("lake: HTTPException", 0)
         ids = set(ids)
-        return [dict(r) for h in sorted(self.rows) for r in self.rows[h] if r["account_id"] in ids and t0 <= r["start_time"] < t1]
+        wm = int((lk or {}).get("wm") or 0)
+        t = max(wm, since - 1)
+        n = 0
+        while t < self.now:
+            t1 = min(self.now, t + 6 * 3600)
+            n += 1
+            if self.fail_pool_rows_after is not None and n > self.fail_pool_rows_after:
+                raise api_mod.ApiError("lake: HTTPException", 0)
+            rows = [dict(r) for h in sorted(self.rows) for r in self.rows[h]
+                    if r["account_id"] in ids and t < r["start_time"] <= t1 and r["start_time"] >= since]
+            t = t1
+            yield rows, {"gen": 1, "wm": t1, "p0": 0, "files": n}
 
     def popular(self, since, until):
         self._call("popular")

@@ -1,12 +1,10 @@
 """One function per deadlock-api source the job reads (spec 5.1), with its parsing. Each takes the Api first."""
 import datetime
-import json
 
 import api as api_mod
 import clean
 import config
 
-GAME_NORMAL = "Normal"
 SLIM = "hero_build_id hero_id author_account_id name description language version last_updated_timestamp development_build"
 FULL = SLIM + (" details { mod_categories { name mods { ability_id annotation } }"
                " ability_order { currency_changes { ability_id currency_type delta } } }")
@@ -39,27 +37,6 @@ def scoreboard(api, t0, t1):
         if len(rows) < 10000 or int(rows[-1].get("badge") or 0) < config.BADGE_ASC:
             break
         start += 10000
-    return out
-
-
-def pool_rows(api, ids, t0, t1, min_span=config.ROWS_MIN_SPAN):
-    """Normal games of the given accounts on every hero in [t0, t1): [{match_id, account_id, hero_id, hero_build_id, won,
-    start_time}] (GraphQL match_players). The API charges a query by the time range it scans (19 Nov), so every hero comes in one
-    query per window, and a full page (10,000 rows) splits its window in two halves instead of paging by offset (each offset page
-    would scan the window again); a window of min_span or less keeps its full page."""
-    idl = ", ".join(str(i) for i in _ids(ids))
-    out, todo = [], [(int(t0), int(t1))]
-    while todo:
-        a, b = todo.pop()
-        q = ("{ match_players(where: {account_id: {in: [%s]}, start_time: {gte: %d, lt: %d}, game_mode: {eq: %s}}, "
-             "order_by: START_TIME, order_direction: DESC, limit: 10000) "
-             "{ match_id account_id hero_id hero_build_id won start_time } }") % (idl, a, b, json.dumps(GAME_NORMAL))
-        rows = (api.gql(q) or {}).get("match_players") or []
-        if len(rows) >= 10000 and b - a > min_span:
-            m = (a + b) // 2
-            todo.extend([(a, m), (m, b)])
-            continue
-        out.extend(rows)
     return out
 
 

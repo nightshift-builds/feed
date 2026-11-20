@@ -23,6 +23,7 @@ if str(HERE) not in sys.path:
 import api as api_mod  # noqa: E402
 import clean  # noqa: E402
 import config  # noqa: E402
+import lake  # noqa: E402
 import pool  # noqa: E402
 import publish  # noqa: E402
 import rank  # noqa: E402
@@ -62,8 +63,8 @@ class Live:
     def scoreboard(self, t0, t1):
         return sources.scoreboard(self.api, t0, t1)
 
-    def pool_rows(self, ids, t0, t1):
-        return sources.pool_rows(self.api, ids, t0, t1)
+    def pool_lake(self, ids, since, lk):
+        return lake.pool_games(ids, since, lk, self.api.ua)
 
     def popular(self, since, until):
         return sources.popular(self.api, since, until)
@@ -104,43 +105,42 @@ def _ints(d):
 
 
 def _pool_games(src, st, pool_ids, now, log):
-    """{hero: [{account_id, hero_build_id, won, start_time}]}: the pool's Normal games of the window. They live in the state; a run
-    fetches the hours since the last one in windows of ROWS_SLICE (the last ROWS_OVERLAP again, for matches the API processes late),
-    the whole window when the state has none in it (19 Nov: the API charges what a query reads; 14 days hero by hero read 20-30 GB).
-    The pool is the current one: a player new to it counts from the games fetched since. A failed fetch keeps the windows that came
-    (the next run goes on from there) and uses the games while they reach to under ROWS_STALE ago; older (or none), the state is saved
-    and the error stops the run: the last deploy stays live."""
+    """{hero: [{account_id, hero_build_id, won, start_time}]}: the pool's Normal games of the window. They live in the state with the
+    data lake's watermark (lake.py): a run reads the lake files that came since the last one, the whole window when the state has no
+    watermark yet (20 Nov: about 160 files, 470 MB of the six columns asked for; then a few MB an hour). The pool is the current one:
+    a player new to it counts from the games read since. A failed read keeps the batches that came (the next run goes on from there)
+    and uses the games while the watermark is under ROWS_STALE old; older (or none), the state is saved and the error stops the run:
+    the last deploy stays live."""
     since = now - config.WINDOW_DAYS * DAY
     have = st.rows or {}
-    until = int(have.get("until") or 0)
     games = {(r[0], r[1]): r for r in have.get("rows") or () if r[5] >= since}
-    start = since if until <= since else max(since, until - config.ROWS_OVERLAP)
-    got, t = 0, start
+    lk = dict(have.get("lake") or {})
+    got, n0 = 0, len(games)
 
-    def keep(upto):
-        st.rows = {"until": upto, "rows": sorted(games.values(), key=lambda r: (r[5], r[0], r[1]))}
+    def keep():
+        st.rows = {"until": int(lk.get("wm") or 0), "lake": lk, "rows": sorted(games.values(), key=lambda r: (r[5], r[0], r[1]))}
 
     try:
-        while t < now:
-            t1 = min(now, t + config.ROWS_SLICE)
-            for r in src.pool_rows(pool_ids, t, t1):       # a window's games are taken only once all of it came
+        for rows, lk2 in src.pool_lake(pool_ids, since, lk):
+            for r in rows:
                 b = r.get("hero_build_id")
                 k = (int(r["match_id"]), int(r["account_id"]))
                 games[k] = [k[0], k[1], int(r["hero_id"]), int(b) if b else None, 1 if r.get("won") else 0, int(r["start_time"])]
                 got += 1
-            t = t1
+            lk = dict(lk2)
+            keep()
     except api_mod.ApiError as e:
-        if t > start:
-            keep(t)
-            until = t
-        if until < now - config.ROWS_STALE:
+        keep()
+        wm = int(lk.get("wm") or 0)
+        if wm < now - config.ROWS_STALE:
             st.save()
             raise
-        log("feed: pool games not fetched after %.1f h ago (%s): the games up to then are used" % ((now - until) / 3600.0, e))
+        log("feed: pool games not read after %.1f h ago (%s): the games up to then are used" % ((now - wm) / 3600.0, e))
     else:
-        keep(now)
-        log("feed: pool games: %d fetched (%s), %d in the window" % (
-            got, "the whole window" if start == since else "the last %.1f h" % ((now - start) / 3600.0), len(games)))
+        keep()
+        log("feed: pool games: %d read from %d lake files (%s), %d new, %d in the window, lake %.1f h behind" % (
+            got, int(lk.get("files") or 0), "the whole window" if not int((have.get("lake") or {}).get("wm") or 0) else "since the last run", len(games) - n0, len(games),
+            (now - int(lk.get("wm") or now)) / 3600.0))
     pool = set(pool_ids)
     by = {}
     for r in games.values():
