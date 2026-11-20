@@ -84,7 +84,7 @@ class TestPoolGames(unittest.TestCase):
         rows = {f["key"]: [self.game(f["hi"], 7, f["hi"]), self.game(f["hi"], 8, f["hi"])] for f in files}
         rd = FakeReader({}, rows)
         out = list(lake.pool_games({7}, 100, {}, "t", reader=rd, man=self.man(files)))
-        self.assertEqual(len(rd.batches), 3)                  # 51 files in the window (hi 100..600), 24 a batch
+        self.assertEqual(len(rd.batches), -(-51 // lake.BATCH))     # 51 files in the window (hi 100..600)
         self.assertEqual(sum(len(g) for g, _ in out), 51)     # account 8 is not in the pool
         self.assertEqual(out[-1][1], {"gen": 3, "wm": 600, "p0": None, "files": 51})
 
@@ -96,7 +96,7 @@ class TestPoolGames(unittest.TestCase):
             for g, st in lake.pool_games({7}, 100, {}, "t", reader=rd, man=self.man(files)):
                 got.append(st)
         self.assertEqual(len(got), 1)
-        self.assertEqual(got[0]["wm"], files[8 + 24]["hi"] - 1)     # the first batch: hi 100..330 read
+        self.assertEqual(got[0]["wm"], files[8 + lake.BATCH]["hi"] - 1)     # the first batch read, the second not
 
     def test_a_new_generation_reads_the_window_again(self):
         files = [delta(i * 10, i * 10 + 10) for i in range(1, 60)]

@@ -16,7 +16,8 @@ import api as api_mod
 LAKE = "https://data.deadlock-api.com"
 MANIFEST = LAKE + "/v1/manifest.json"
 TABLE = "match_player"
-BATCH = 24          # files per query: a failed query loses at most this many, the ones before it are kept
+BATCH = 6           # files per query: a failed query loses at most this many, the ones before it are kept; residual files run
+                    # to 3 million rows (4.7 GB whole) and a runner has 16 GB
 GAME_NORMAL = "Normal"
 
 
@@ -103,9 +104,15 @@ class Reader:
 
     def __init__(self):
         import duckdb
+        import tempfile
         self.con = duckdb.connect()
         self.con.execute("INSTALL httpfs")
         self.con.execute("LOAD httpfs")
+        # 20 Nov: the first fill's first batch ran out of memory on a runner (24 files with the largest residuals): fewer threads, no
+        # insertion order to keep, room to spill to disk
+        for q in ("SET threads = 2", "SET preserve_insertion_order = false", "SET memory_limit = '6GB'",
+                  "SET temp_directory = '%s'" % tempfile.mkdtemp(prefix="lake_").replace("\\", "/").replace("'", "")):
+            self.con.execute(q)
 
     def url(self, key):
         return LAKE + "/" + key
@@ -150,5 +157,6 @@ def pool_games(ids, since, lk, ua, reader=None, man=None):
             yield got, state
     except api_mod.ApiError:
         raise
-    except Exception as e:      # duckdb's errors (HTTP, a file gone after a fold) end the fetch the way an API error does
-        raise api_mod.ApiError("lake: " + type(e).__name__, 0)
+    except Exception as e:      # duckdb's errors (HTTP, a file gone after a fold, memory) end the fetch the way an API error does
+        # its text names a file, a size or a setting, never a player: kept short for the log
+        raise api_mod.ApiError("lake: %s: %s" % (type(e).__name__, " ".join(str(e).split())[:240]), 0)

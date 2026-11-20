@@ -115,7 +115,7 @@ def _pool_games(src, st, pool_ids, now, log):
     have = st.rows or {}
     games = {(r[0], r[1]): r for r in have.get("rows") or () if r[5] >= since}
     lk = dict(have.get("lake") or {})
-    got, n0 = 0, len(games)
+    got, n0, nb, t0 = 0, len(games), 0, time.time()
 
     def keep():
         st.rows = {"until": int(lk.get("wm") or 0), "lake": lk, "rows": sorted(games.values(), key=lambda r: (r[5], r[0], r[1]))}
@@ -129,6 +129,9 @@ def _pool_games(src, st, pool_ids, now, log):
                 got += 1
             lk = dict(lk2)
             keep()
+            nb += 1
+            if nb == 1 or nb % 5 == 0:
+                log("feed: lake: %d batches, %d games so far (%.0f s)" % (nb, got, time.time() - t0))
     except api_mod.ApiError as e:
         keep()
         wm = int(lk.get("wm") or 0)
