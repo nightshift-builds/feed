@@ -6,8 +6,10 @@ in the mod's repository. This folder is the future organization repository: its 
 
 ## What runs where
 
-- `job/` (Python 3.12, standard library only) runs every hour in GitHub Actions (`.github/workflows/feed.yml`, cron `23 * * * *`,
-  also by hand). It reads deadlock-api (api.deadlock-api.com) only, and writes the static site `_site/`:
+- `job/` (Python 3.12, standard library only) runs every hour in GitHub Actions (`.github/workflows/feed.yml`), started at :23 by an
+  outside scheduler (cron-job.org) through the API's `workflow_dispatch`, also by hand. The scheduler holds a fine-grained token
+  (this repository, Actions: read and write) that expires after a year: renew it there. It reads deadlock-api (api.deadlock-api.com)
+  only, and writes the static site `_site/`:
   - `relay.html`, the page the mod loads in a hidden in-game browser panel;
   - `data/index.json`: the generation, the season, the circles' sizes, `heroes` {key: id};
   - `data/<gen>/<hero id>.json`: a hero's list;
@@ -17,8 +19,7 @@ in the mod's repository. This folder is the future organization repository: its 
   Each deploy keeps the previous generation's lists too.
 - The job's private state (build metadata, player names and regions, the last run's lists and stats) lives in the Actions cache
   (`state/`). It is never published: it holds account ids.
-- Once a day the job writes `data/history/YYYY-MM-DD.json` (build ids and counts, no names) and the workflow commits it. That keeps the
-  repository active, so GitHub does not switch the schedule off after 60 quiet days.
+- Once a day the job writes `data/history/YYYY-MM-DD.json` (build ids and counts, no names) and the workflow commits it.
 - A run that looks broken deploys nothing, and the last good deploy stays live:
   - the high-rank pool falls under half of the last run's;
   - or many more heroes lose their Eternus+ list than last time;

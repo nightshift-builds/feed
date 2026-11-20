@@ -3,9 +3,9 @@
 # folder; inside the mod's repository it sits one level too deep for GitHub to run it.
 # Pin the actions to the majors current when publishing (README "Publishing").
 name: feed
+# Started every hour at :23 by an outside scheduler (cron-job.org) through the API's workflow_dispatch, also by hand from the
+# Actions tab. GitHub's own schedule ran a few times a day at best (19-20 Nov), so there is none here.
 on:
-  schedule:
-    - cron: "23 * * * *"
   workflow_dispatch: {}
 permissions:
   contents: read
@@ -43,7 +43,7 @@ jobs:
         with:
           path: state
           key: feed-state-${{ github.run_id }}
-      - name: "Commit the daily snapshot (build ids and counts only, it also keeps the schedule alive)"
+      - name: "Commit the daily snapshot (build ids and counts only)"
         run: |
           if [ -n "$(git status --porcelain -- data/history)" ]; then
             git config user.name "github-actions[bot]"
