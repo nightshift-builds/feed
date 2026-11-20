@@ -108,9 +108,11 @@ class Reader:
         self.con = duckdb.connect()
         self.con.execute("INSTALL httpfs")
         self.con.execute("LOAD httpfs")
-        # 20 Nov: the first fill's first batch ran out of memory on a runner (24 files with the largest residuals): fewer threads, no
-        # insertion order to keep, room to spill to disk
-        for q in ("SET threads = 2", "SET preserve_insertion_order = false", "SET memory_limit = '6GB'",
+        # 20 Nov: the first fill ran out of memory on a runner: a residual file's row group is about 790 MB and the six columns sit at
+        # its start and 240 MB in, and the parquet prefetch read the span between them in one piece (an allocation of 3.5 GiB).
+        # Without the prefetch each column chunk is read on its own. Also fewer threads, no insertion order, room to spill to disk.
+        for q in ("SET disable_parquet_prefetching = true", "SET threads = 2", "SET preserve_insertion_order = false",
+                  "SET memory_limit = '6GB'",
                   "SET temp_directory = '%s'" % tempfile.mkdtemp(prefix="lake_").replace("\\", "/").replace("'", "")):
             self.con.execute(q)
 
