@@ -93,9 +93,12 @@ class Api:
                     return json.loads(data.decode("utf-8"))
                 except ValueError:
                     raise ApiError("answer not JSON", 200)
-            if status in (429, 503) and attempt + 1 < self.tries:
+            # busy (429, 503) or a gateway that gave up on a slow answer (502, 504: the API under load): tried again; a gateway
+            # error waits longer (10, 20, 40 s) than a busy answer (1, 2, 4 s) when no Retry-After says how long
+            if status in (429, 502, 503, 504) and attempt + 1 < self.tries:
                 ra = _retry_after(hdrs)
-                self.sleep(min(ra if ra is not None else 2 ** attempt, config.RETRY_AFTER_MAX))
+                base = 10 if status in (502, 504) else 1
+                self.sleep(min(ra if ra is not None else base * 2 ** attempt, config.RETRY_AFTER_MAX))
                 continue
             raise ApiError("http %d" % status, status)
         raise ApiError("http %d" % status, status)

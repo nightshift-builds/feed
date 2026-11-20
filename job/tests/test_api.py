@@ -62,16 +62,27 @@ class Client(unittest.TestCase):
         self.assertEqual(a.get("/p", {}), {"ok": 2})
         self.assertEqual(c.sleeps, [1])
 
+    def test_gateway_errors_tried_again(self):
+        # 19-20 Nov: the hourly run stopped at one 504 (the API busy); a gateway error waits longer than a 503 (10, 20, 40 s)
+        a, o, c = client([(504, {}, b""), (502, {}, b""), (200, {}, {"ok": 3})])
+        self.assertEqual(a.get("/p", {}), {"ok": 3})
+        self.assertEqual((c.sleeps, len(o.reqs)), ([10, 20], 3))
+
     def test_gives_up(self):
         a, o, c = client([(503, {}, b"")] * 4)
         with self.assertRaises(api.ApiError) as e:
             a.get("/p", {})
         self.assertEqual(e.exception.status, 503)
         self.assertEqual(len(o.reqs), 4)
-        a, o, c = client([(504, {"Retry-After": "120"}, b"")])
+        # a gateway error (502, 504) is tried again like 503, up to the same 4 tries; its Retry-After is capped too
+        a, o, c = client([(504, {"Retry-After": "120"}, b"")] * 4)
         with self.assertRaises(api.ApiError) as e:
             a.get("/p", {})
-        self.assertEqual((e.exception.status, len(o.reqs)), (504, 1))
+        self.assertEqual((e.exception.status, len(o.reqs), c.sleeps), (504, 4, [60, 60, 60]))
+        a, o, c = client([(500, {}, b"")])
+        with self.assertRaises(api.ApiError) as e:
+            a.get("/p", {})
+        self.assertEqual((e.exception.status, len(o.reqs)), (500, 1))
         a, o, c = client([OSError("no route")])
         with self.assertRaises(api.ApiError) as e:
             a.get("/p", {})
