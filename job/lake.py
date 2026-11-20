@@ -219,34 +219,46 @@ class Reader:
         finally:
             self._done(f)
 
-    def games(self, keys, ids, since):
-        """[{match_id, account_id, hero_id, hero_build_id, won, start_time}] of the pool's Normal games from `since` in these files."""
+    def _file_games(self, key, pool, since):
         import pyarrow as pa
         import pyarrow.compute as pc
+        f, pf = self._open(key)
+        try:
+            groups = self._row_groups(pf.metadata, since)
+            if not groups:
+                return [], f
+            t = pf.read_row_groups(groups, columns=COLS)
+            gm = t["game_mode"]
+            if pa.types.is_dictionary(gm.type):
+                gm = gm.cast(pa.string())
+            mask = pc.and_(pc.and_(pc.equal(gm, GAME_NORMAL), pc.greater_equal(self._secs(t["start_time"]), int(since))),
+                           pc.is_in(pc.cast(t["account_id"], pa.int64()), value_set=pool))
+            t = t.filter(mask)
+            st = self._secs(t["start_time"]).to_pylist()
+            cols = {c: t[c].to_pylist() for c in ("match_id", "account_id", "hero_id", "hero_build_id", "won")}
+            out = []
+            for i in range(t.num_rows):
+                b = cols["hero_build_id"][i]
+                out.append({"match_id": int(cols["match_id"][i]), "account_id": int(cols["account_id"][i]),
+                            "hero_id": int(cols["hero_id"][i]), "hero_build_id": int(b) if b else None,
+                            "won": bool(cols["won"][i]), "start_time": int(st[i])})
+            return out, f
+        except BaseException:
+            self._done(f)
+            raise
+
+    def games(self, keys, ids, since):
+        """[{match_id, account_id, hero_id, hero_build_id, won, start_time}] of the pool's Normal games from `since` in these files,
+        the files read side by side (20 Nov: one after another, the first fill's 154 files took 27 minutes, each range request
+        waiting on the one before)."""
+        import concurrent.futures
+        import pyarrow as pa
         pool = pa.array(sorted(int(i) for i in ids), type=pa.int64())
         out = []
-        for key in keys:
-            f, pf = self._open(key)
-            try:
-                groups = self._row_groups(pf.metadata, since)
-                if not groups:
-                    continue
-                t = pf.read_row_groups(groups, columns=COLS)
-                gm = t["game_mode"]
-                if pa.types.is_dictionary(gm.type):
-                    gm = gm.cast(pa.string())
-                mask = pc.and_(pc.and_(pc.equal(gm, GAME_NORMAL), pc.greater_equal(self._secs(t["start_time"]), int(since))),
-                               pc.is_in(pc.cast(t["account_id"], pa.int64()), value_set=pool))
-                t = t.filter(mask)
-                st = self._secs(t["start_time"]).to_pylist()
-                cols = {c: t[c].to_pylist() for c in ("match_id", "account_id", "hero_id", "hero_build_id", "won")}
-                for i in range(t.num_rows):
-                    b = cols["hero_build_id"][i]
-                    out.append({"match_id": int(cols["match_id"][i]), "account_id": int(cols["account_id"][i]),
-                                "hero_id": int(cols["hero_id"][i]), "hero_build_id": int(b) if b else None,
-                                "won": bool(cols["won"][i]), "start_time": int(st[i])})
-            finally:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(len(keys), BATCH))) as ex:
+            for got, f in ex.map(lambda k: self._file_games(k, pool, since), keys):
                 self._done(f)
+                out.extend(got)
         return out
 
 
