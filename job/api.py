@@ -27,14 +27,27 @@ def _urlopen(req, timeout):
         return e.code, dict((e.headers or {}).items()), body
 
 
-def _retry_after(headers):
+def _header(headers, name):
     for k, v in (headers or {}).items():
-        if k.lower() == "retry-after":
-            try:
-                return max(0.0, float(v))
-            except (TypeError, ValueError):
-                return None
+        if k.lower() == name:
+            return v
     return None
+
+
+def _retry_after(headers):
+    v = _header(headers, "retry-after")
+    try:
+        return None if v is None else max(0.0, float(v))
+    except (TypeError, ValueError):
+        return None
+
+
+def _read_bytes(headers):
+    """The data the database read for an answer (X-CH-Read-Bytes; GraphQL is charged by it since 19 Nov), 0 when not given."""
+    try:
+        return max(0, int(_header(headers, "x-ch-read-bytes") or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _qs(params):
@@ -64,6 +77,7 @@ class Api:
         self.clock = clock
         self.timeout = timeout
         self.count = 0
+        self.read_bytes = 0     # the data GraphQL answers read (X-CH-Read-Bytes), the budget the API charges (the run's last line)
         self._last = None
 
     def _wait(self):
@@ -89,6 +103,8 @@ class Api:
             except (OSError, ValueError) as e:
                 raise ApiError("network: " + type(e).__name__, 0)
             if status == 200:
+                if url.endswith("/v1/graphql"):     # charged by the data read; the analytics endpoints count requests only
+                    self.read_bytes += _read_bytes(hdrs)
                 try:
                     return json.loads(data.decode("utf-8"))
                 except ValueError:

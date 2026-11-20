@@ -52,14 +52,18 @@ class Live:
     def count(self):
         return self.api.count
 
+    @property
+    def read_bytes(self):
+        return self.api.read_bytes
+
     def seasons(self):
         return sources.seasons(self.api)
 
     def scoreboard(self, t0, t1):
         return sources.scoreboard(self.api, t0, t1)
 
-    def hero_rows(self, hero, ids, since):
-        return sources.hero_rows(self.api, hero, ids, since)
+    def pool_rows(self, ids, t0, t1):
+        return sources.pool_rows(self.api, ids, t0, t1)
 
     def popular(self, since, until):
         return sources.popular(self.api, since, until)
@@ -97,6 +101,52 @@ class Live:
 
 def _ints(d):
     return {int(k): v for k, v in (d or {}).items()}
+
+
+def _pool_games(src, st, pool_ids, now, log):
+    """{hero: [{account_id, hero_build_id, won, start_time}]}: the pool's Normal games of the window. They live in the state; a run
+    fetches the hours since the last one in windows of ROWS_SLICE (the last ROWS_OVERLAP again, for matches the API processes late),
+    the whole window when the state has none in it (19 Nov: the API charges what a query reads; 14 days hero by hero read 20-30 GB).
+    The pool is the current one: a player new to it counts from the games fetched since. A failed fetch keeps the windows that came
+    (the next run goes on from there) and uses the games while they reach to under ROWS_STALE ago; older (or none), the state is saved
+    and the error stops the run: the last deploy stays live."""
+    since = now - config.WINDOW_DAYS * DAY
+    have = st.rows or {}
+    until = int(have.get("until") or 0)
+    games = {(r[0], r[1]): r for r in have.get("rows") or () if r[5] >= since}
+    start = since if until <= since else max(since, until - config.ROWS_OVERLAP)
+    got, t = 0, start
+
+    def keep(upto):
+        st.rows = {"until": upto, "rows": sorted(games.values(), key=lambda r: (r[5], r[0], r[1]))}
+
+    try:
+        while t < now:
+            t1 = min(now, t + config.ROWS_SLICE)
+            for r in src.pool_rows(pool_ids, t, t1):       # a window's games are taken only once all of it came
+                b = r.get("hero_build_id")
+                k = (int(r["match_id"]), int(r["account_id"]))
+                games[k] = [k[0], k[1], int(r["hero_id"]), int(b) if b else None, 1 if r.get("won") else 0, int(r["start_time"])]
+                got += 1
+            t = t1
+    except api_mod.ApiError as e:
+        if t > start:
+            keep(t)
+            until = t
+        if until < now - config.ROWS_STALE:
+            st.save()
+            raise
+        log("feed: pool games not fetched after %.1f h ago (%s): the games up to then are used" % ((now - until) / 3600.0, e))
+    else:
+        keep(now)
+        log("feed: pool games: %d fetched (%s), %d in the window" % (
+            got, "the whole window" if start == since else "the last %.1f h" % ((now - start) / 3600.0), len(games)))
+    pool = set(pool_ids)
+    by = {}
+    for r in games.values():
+        if r[1] in pool:
+            by.setdefault(r[2], []).append({"account_id": r[1], "hero_build_id": r[3], "won": bool(r[4]), "start_time": r[5]})
+    return by
 
 
 def _assets(src, st, now):
@@ -198,6 +248,7 @@ def run(src, st, out, now, site_url="", history_dir=None, log=print, validate=Tr
     log("feed: gen %s, pool %d (top %d, ete %d, asc %d), regions known %d%%%s, handover %s" % (
         gen, len(pool_ids), counts["top"], counts["ete"], counts["asc"], round(100 * len(region_by) / max(1, len(pool_ids))),
         (" (chips " + " ".join(chips) + ")") if chips else " (no chips yet)", "on" if w["handover"] else "off"))
+    games_of = _pool_games(src, st, pool_ids, now, log)
 
     # ---- build metadata (5.1): a seed per hero when missing or a week old, else what changed since the last run
     meta = {int(k): v for k, v in st.meta["builds"].items()}
@@ -272,16 +323,7 @@ def run(src, st, out, now, site_url="", history_dir=None, log=print, validate=Tr
     for h in sorted(heroes):
         key = heroes[h]["key"]
         slot_of = heroes[h]["slots"]
-        try:
-            rows = src.hero_rows(h, pool_ids, now - config.WINDOW_DAYS * DAY)
-        except api_mod.ApiError as e:
-            log("feed: hero %d rows failed (%s)" % (h, e))
-            mine = {rel: b for rel, b in keep.items() if rel in ("data/%s/%d.json" % (prev_gen, h), "data/%s/popular/%d.json" % (prev_gen, h))}
-            if mine:
-                for rel, b in mine.items():
-                    raw[rel.replace("data/%s/" % prev_gen, "data/%s/" % gen, 1)] = b
-                carried.append(h)
-            continue
+        rows = games_of.get(h, [])
         # builds this hero's players ran that the metadata does not know yet (older than the seed window): looked up by id
         unknown = sorted({int(r["hero_build_id"]) for r in rows if r.get("hero_build_id") and int(r["hero_build_id"]) >= MIN_PUBLISHED_ID
                           and int(r["hero_build_id"]) not in meta and int(r["hero_build_id"]) not in missing})[:UNKNOWN_MAX]
@@ -496,8 +538,9 @@ def run(src, st, out, now, site_url="", history_dir=None, log=print, validate=Tr
         if not p.exists():
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_bytes(shape.dumps(publish.history(lists, day, gen)).encode("utf-8"))
-    log("feed: wrote %d files (%d build details, %d fetched), %d carried, %d seeds, %d requests, %.1f s" % (
-        len(files) + len(keep) + len(raw), n_det, fetched[0], len(carried), n_seed, src.count, time.monotonic() - t_start))
+    log("feed: wrote %d files (%d build details, %d fetched), %d carried, %d seeds, %d requests, %.0f MB read by GraphQL, %.1f s" % (
+        len(files) + len(keep) + len(raw), n_det, fetched[0], len(carried), n_seed, src.count, getattr(src, "read_bytes", 0) / 1e6,
+        time.monotonic() - t_start))
     return 0
 
 

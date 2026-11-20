@@ -2,6 +2,7 @@
 import gzip
 import json
 import os
+import re
 import tempfile
 import unittest
 import urllib.parse
@@ -61,6 +62,17 @@ class Client(unittest.TestCase):
         a, o, c = client([(503, {}, b""), (200, {}, {"ok": 2})])
         self.assertEqual(a.get("/p", {}), {"ok": 2})
         self.assertEqual(c.sleeps, [1])
+
+    def test_read_bytes_counted(self):
+        # 20 Nov: GraphQL is charged by the data the database reads (X-CH-Read-Bytes); the run's last line says how much it read.
+        # The analytics endpoints report a read too but are limited by requests only: not counted
+        a, o, c = client([(200, {"X-CH-Read-Bytes": "1500000"}, {"data": {}}), (200, {"x-ch-read-bytes": "500000"}, {"data": {}}),
+                          (200, {}, {"data": {}}), (200, {"X-CH-Read-Bytes": "3000000000"}, [1])])
+        a.gql("{ a }")
+        a.gql("{ b }")
+        a.gql("{ c }")
+        a.get("/v1/analytics/scoreboards/players", {})
+        self.assertEqual(a.read_bytes, 2000000)
 
     def test_gateway_errors_tried_again(self):
         # 19-20 Nov: the hourly run stopped at one 504 (the API busy); a gateway error waits longer than a 503 (10, 20, 40 s)
@@ -162,20 +174,33 @@ class Sources(unittest.TestCase):
         sources.scoreboard(f, 0, 7200)
         self.assertEqual(len(f.gets), 1)
 
-    def test_hero_rows_pages(self):
+    def test_pool_rows_every_hero_one_window(self):
+        # 20 Nov: the read is charged by the time range scanned, so every hero comes in one query per window, and a full page
+        # (10,000 rows) splits its window in two halves instead of paging by offset (each offset page scans the window again)
         calls = []
 
         def g(q):
             calls.append(q)
             n = 10000 if len(calls) == 1 else 7
-            return {"match_players": [{"account_id": 1, "hero_build_id": 5, "won": True, "start_time": 9}] * n}
+            return {"match_players": [{"match_id": len(calls), "account_id": 1, "hero_id": 6, "hero_build_id": 5, "won": True,
+                                       "start_time": 1500}] * n}
         f = FakeApi(gql=g)
-        rows = sources.hero_rows(f, 18, [3, 1, 2], 1000)
-        self.assertEqual(len(rows), 10007)
+        rows = sources.pool_rows(f, [3, 1, 2], 1000, 8200)
+        self.assertEqual((len(rows), len(calls)), (14, 3))
         self.assertIn("account_id: {in: [1, 2, 3]}", calls[0])
         self.assertIn('game_mode: {eq: "Normal"}', calls[0])
-        self.assertIn("hero_id: {eq: 18}", calls[0])
-        self.assertIn("offset: 10000", calls[1])
+        self.assertIn("start_time: {gte: 1000, lt: 8200}", calls[0])
+        self.assertNotIn("hero_id: {eq:", calls[0])
+        self.assertNotIn("offset", calls[0])
+        self.assertIn("match_id account_id hero_id hero_build_id won start_time", calls[0])
+        halves = sorted(re.search(r"gte: (\d+), lt: (\d+)", q).groups() for q in calls[1:])
+        self.assertEqual(halves, [("1000", "4600"), ("4600", "8200")])
+
+    def test_pool_rows_short_window_keeps_its_full_page(self):
+        f = FakeApi(gql=lambda q: {"match_players": [{"match_id": 1, "account_id": 1, "hero_id": 6, "hero_build_id": 5, "won": True,
+                                                       "start_time": 1500}] * 10000})
+        rows = sources.pool_rows(f, [1], 1000, 1000 + 1800)
+        self.assertEqual((len(rows), len(f.gqls)), (10000, 1))
 
     def test_details_batches(self):
         pairs = [(18, 1000 + i) for i in range(45)]

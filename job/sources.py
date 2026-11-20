@@ -42,19 +42,24 @@ def scoreboard(api, t0, t1):
     return out
 
 
-def hero_rows(api, hero_id, ids, since):
-    """Normal games of the given accounts on one hero since `since`: [{account_id, hero_build_id, won, start_time}] (GraphQL
-    match_players, pages of 10,000, at most 5)."""
+def pool_rows(api, ids, t0, t1, min_span=config.ROWS_MIN_SPAN):
+    """Normal games of the given accounts on every hero in [t0, t1): [{match_id, account_id, hero_id, hero_build_id, won,
+    start_time}] (GraphQL match_players). The API charges a query by the time range it scans (19 Nov), so every hero comes in one
+    query per window, and a full page (10,000 rows) splits its window in two halves instead of paging by offset (each offset page
+    would scan the window again); a window of min_span or less keeps its full page."""
     idl = ", ".join(str(i) for i in _ids(ids))
-    out = []
-    for page in range(5):
-        q = ("{ match_players(where: {account_id: {in: [%s]}, hero_id: {eq: %d}, start_time: {gte: %d}, game_mode: {eq: %s}}, "
-             "order_by: START_TIME, order_direction: DESC, limit: 10000, offset: %d) "
-             "{ account_id hero_build_id won start_time } }") % (idl, int(hero_id), int(since), json.dumps(GAME_NORMAL), page * 10000)
+    out, todo = [], [(int(t0), int(t1))]
+    while todo:
+        a, b = todo.pop()
+        q = ("{ match_players(where: {account_id: {in: [%s]}, start_time: {gte: %d, lt: %d}, game_mode: {eq: %s}}, "
+             "order_by: START_TIME, order_direction: DESC, limit: 10000) "
+             "{ match_id account_id hero_id hero_build_id won start_time } }") % (idl, a, b, json.dumps(GAME_NORMAL))
         rows = (api.gql(q) or {}).get("match_players") or []
+        if len(rows) >= 10000 and b - a > min_span:
+            m = (a + b) // 2
+            todo.extend([(a, m), (m, b)])
+            continue
         out.extend(rows)
-        if len(rows) < 10000:
-            break
     return out
 
 

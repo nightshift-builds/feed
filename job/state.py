@@ -43,9 +43,12 @@ class State:
         self.stats = {}                                        # the last good run: pool, empty_ete, with_lists, gen
         self.assets = {}                                       # {"at": t, "data": sources.assets() with string keys}
         self.prevseason = {}                                   # {"season": "start-end", "full": bool, "rows": [[acct, badge, value]]}
+        self.rows = {}                                         # the pool's games of the window: {"until": t, "rows": [[match_id, acct,
+                                                               # hero, build or None, won 0/1, start_time]]} (run._pool_games)
 
     FILES = (("meta", "meta.json.gz"), ("details", "details.json.gz"), ("names", "names.json"), ("regions", "regions.json"),
-             ("stats", "stats.json"), ("assets", "assets.json.gz"), ("prevseason", "prevseason.json.gz"))
+             ("stats", "stats.json"), ("assets", "assets.json.gz"), ("prevseason", "prevseason.json.gz"),
+             ("rows", "rows.json.gz"))
 
     def load(self):
         for attr, name in self.FILES:

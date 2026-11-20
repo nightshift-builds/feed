@@ -51,12 +51,13 @@ def acct(i):
 
 
 class World:
-    def __init__(self, now, fillers=30, pool_share=1.0, fail_rows=(), bump=None, sb_fail_wide=False, base=1794916800, s2_age=12,
+    def __init__(self, now, fillers=30, pool_share=1.0, fail_pool_rows=False, fail_pool_rows_after=None, bump=None, sb_fail_wide=False, base=1794916800, s2_age=12,
                  fail_popular=False, fail_names=False, fail_details=False, odd_names=False):
         self.now = now
         self.base = base      # every time of the made-up data hangs on this fixed moment, so a later run sees the same world
         self.calls = []
-        self.fail_rows = set(fail_rows)
+        self.fail_pool_rows = fail_pool_rows   # the pool's games answer 504
+        self.fail_pool_rows_after = fail_pool_rows_after   # ... after this many windows came
         self.sb_fail_wide = sb_fail_wide     # a scoreboard over more than 100 days answers 504 (deadlock-api's time limit)
         self.fail_popular, self.fail_names, self.fail_details = fail_popular, fail_names, fail_details   # that source answers 504
         self.odd_names = odd_names           # some Steam names carry Panorama-special text (a leading '#', markup, {s:..}, bidi)
@@ -69,6 +70,11 @@ class World:
         self.protected = {acct(42)}
         self.site = {}        # relative path -> bytes (the live site, for the previous generation)
         self._make()
+        n = 0
+        for hero in sorted(self.rows):        # each game row a match of its own (match_id) and its hero, as match_players gives them
+            for r in self.rows[hero]:
+                n += 1
+                r["match_id"], r["hero_id"] = 90_000_000 + n, hero
         if bump:              # (bid, seconds after now): a new version of that build
             bid, dt = bump
             b = self.builds[bid]
@@ -228,12 +234,13 @@ class World:
         out = [(acct(i), self.badge(i) if not 1500 <= i < 1550 else 101, 70000 - i * 3) for i in range(self.n_pool)]
         return out + [(LOW0 + i, 95, 30000 - i) for i in range(300)]
 
-    def hero_rows(self, hero, ids, since):
-        self._call("hero_rows", hero)
-        if hero in self.fail_rows:
+    def pool_rows(self, ids, t0, t1):
+        self._call("pool_rows", t0, t1)
+        n = sum(1 for c in self.calls if c[0] == "pool_rows")
+        if self.fail_pool_rows or (self.fail_pool_rows_after is not None and n > self.fail_pool_rows_after):
             raise api_mod.ApiError("http 504", 504)
         ids = set(ids)
-        return [r for r in self.rows.get(hero, ()) if r["account_id"] in ids and r["start_time"] >= since]
+        return [dict(r) for h in sorted(self.rows) for r in self.rows[h] if r["account_id"] in ids and t0 <= r["start_time"] < t1]
 
     def popular(self, since, until):
         self._call("popular")

@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import config
 import publish
 import run
 import shape
@@ -12,6 +13,7 @@ from tests import build_harness_site
 from tests.world import World, acct
 
 NOW = 1794916800          # 2026-11-17T12:00:00Z
+DAY = 86400
 REPO = Path(__file__).resolve().parents[3]
 
 
@@ -263,14 +265,58 @@ class LaterRuns(Base):
         self.assertEqual(self.index()["gen"], gen1)
         self.assertTrue(any("validation" in l for l in self.lines))
 
-    def test_hero_failure_carried(self):
+    def test_pool_games_kept_between_runs(self):
+        # 20 Nov: the pool's games of the window live in the state; a later run fetches the hours since the last one (and the last
+        # ROWS_OVERLAP again, for matches the API processes late), never the whole window again
+        w1 = World(NOW)
+        self.assertEqual(self.go(w1), 0)
+        first = [c for c in w1.calls if c[0] == "pool_rows"]
+        self.assertEqual((min(c[1] for c in first), max(c[2] for c in first)), (NOW - config.WINDOW_DAYS * DAY, NOW))
+        self.assertTrue(all(c[2] - c[1] <= config.ROWS_SLICE for c in first))
+        kept = state.State(self.d / "state").load().rows
+        self.assertEqual(kept["until"], NOW)
+        self.assertGreater(len(kept["rows"]), 1000)
+        w2 = World(NOW + 3600)
+        self.assertEqual(self.go(w2), 0, "\n".join(self.lines))
+        second = [c for c in w2.calls if c[0] == "pool_rows"]
+        self.assertEqual((min(c[1] for c in second), max(c[2] for c in second)), (NOW - config.ROWS_OVERLAP, NOW + 3600))
+        rows = state.State(self.d / "state").load().rows["rows"]
+        self.assertEqual(len({(r[0], r[1]) for r in rows}), len(rows))     # the overlap brings no game twice
+        self.assertTrue(all(r[5] >= NOW + 3600 - config.WINDOW_DAYS * DAY for r in rows))
+
+    def test_pool_games_from_the_state_when_the_fetch_fails(self):
         self.assertEqual(self.go(World(NOW)), 0)
         gen1 = self.index()["gen"]
-        before = (self.d / "out" / "data" / gen1 / "6.json").read_bytes()
-        self.assertEqual(self.go(World(NOW + 3600, fail_rows={6})), 0)
+        self.assertEqual(self.go(World(NOW + 3600, fail_pool_rows=True)), 0, "\n".join(self.lines))
         ix = self.index()
-        self.assertEqual(ix["carried"], [6])
-        self.assertEqual((self.d / "out" / "data" / ix["gen"] / "6.json").read_bytes(), before)
+        self.assertNotEqual(ix["gen"], gen1)
+        self.assertEqual(ix["carried"], [])
+        self.assertTrue(any("pool games not fetched" in l for l in self.lines), "\n".join(self.lines))
+        self.assertEqual(state.State(self.d / "state").load().rows["until"], NOW)
+
+    def test_whole_window_fetch_goes_on_from_where_it_stopped(self):
+        # the first fill reads the whole window (about 6-8 GB without a key, over the per-minute budget): windows that came are kept,
+        # so a run cut short by the API leaves the next one only the rest
+        w1 = World(NOW, fail_pool_rows_after=10)      # the made-up games start 13.3 days back: 60 hours of windows hold some
+        with self.assertRaises(run.api_mod.ApiError):
+            self.go(w1)
+        since = NOW - config.WINDOW_DAYS * DAY
+        kept = state.State(self.d / "state").load().rows
+        self.assertEqual(kept["until"], since + 10 * config.ROWS_SLICE)
+        self.assertGreater(len(kept["rows"]), 0)
+        w2 = World(NOW)
+        self.assertEqual(self.go(w2), 0, "\n".join(self.lines))
+        self.assertEqual(min(c[1] for c in w2.calls if c[0] == "pool_rows"), since + 10 * config.ROWS_SLICE - config.ROWS_OVERLAP)
+
+    def test_stale_pool_games_stop_the_run(self):
+        # games older than ROWS_STALE (or none) and a failed fetch: nothing is rebuilt, the last deploy stays live (main: exit 2)
+        self.assertEqual(self.go(World(NOW)), 0)
+        gen1 = self.index()["gen"]
+        with self.assertRaises(run.api_mod.ApiError):
+            self.go(World(NOW + config.ROWS_STALE + 3600, fail_pool_rows=True))
+        self.assertEqual(self.index()["gen"], gen1)
+        with self.assertRaises(run.api_mod.ApiError):
+            self.go(World(NOW, fail_pool_rows=True), out="out2", st="s2")
 
     def test_prev_gen_from_site(self):
         self.assertEqual(self.go(World(NOW), out="out1", st="s1"), 0)

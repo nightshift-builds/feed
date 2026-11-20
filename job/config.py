@@ -7,6 +7,13 @@ API = "https://api.deadlock-api.com"
 
 # windows (5.1-5.4)
 WINDOW_DAYS = 14          # runs counted: a player's Normal games in the last 14 days
+# the pool's games of the window live in the state (run._pool_games): a run fetches the hours since the last one in windows of
+# ROWS_SLICE (every hero at once: the API charges the time range it scans), the last ROWS_OVERLAP again for matches it processes late;
+# a failed fetch uses the state's games while they are under ROWS_STALE old, else the run stops (the last deploy stays live)
+ROWS_SLICE = 6 * 3600
+ROWS_OVERLAP = 6 * 3600
+ROWS_STALE = 6 * 3600
+ROWS_MIN_SPAN = 1800      # a full page of a window this short is kept as it is (not split again)
 RECENT_DAYS = 7           # recent(r): the runner's last game on the build within 7 days
 AUTHOR_DAYS = 90          # authored builds count while updated within 90 days
 HANDOVER_DAYS = 28        # a new season: the better of this season's and last season's final badge for 28 days

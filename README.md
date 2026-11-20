@@ -17,8 +17,12 @@ in the mod's repository. This folder is the future organization repository: its 
   - `data/b/<build id>_<version>.json`: a build's details.
 
   Each deploy keeps the previous generation's lists too.
-- The job's private state (build metadata, player names and regions, the last run's lists and stats) lives in the Actions cache
-  (`state/`). It is never published: it holds account ids.
+- The job's private state (build metadata, player names and regions, the pool's games of the last 14 days, the last run's lists
+  and stats) lives in the Actions cache (`state/`). It is never published: it holds account ids.
+- Since 19 Nov deadlock-api charges GraphQL by the data it reads (10 GB an hour per IP, 150 GB with a key). The job keeps the pool's
+  games in its state and fetches only the hours since the last run, every hero in one query per window (about 75 MB a run); the
+  first fill reads the whole window once (6-8 GB, carried on by the next run if the API cuts it short). The run's last log line
+  says how much GraphQL read (the analytics endpoints count requests, not data).
 - Once a day the job writes `data/history/YYYY-MM-DD.json` (build ids and counts, no names) and the workflow commits it.
 - A run that looks broken deploys nothing, and the last good deploy stays live:
   - the high-rank pool falls under half of the last run's;
