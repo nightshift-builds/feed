@@ -232,6 +232,25 @@ class LaterRuns(Base):
         self.assertIn("assets", [c[0] for c in w2.calls])
         self.assertTrue(any(r.get("mix") for r in rows_of(self.hero(13))))
 
+    def test_rows_carry_all_ranks(self):
+        w = World(NOW)
+        self.assertEqual(self.go(w), 0, "\n".join(self.lines))
+        ans = {int(x["hero_build_id"]): (x["matches"], x["wins"]) for x in World(NOW).popular(0, 0)}
+        rows = rows_of(self.hero(13))
+        seen = 0
+        for r in rows:
+            self.assertFalse(any("ar" in e for e in r["use"].values()), r["id"])
+            if r["id"] in ans:
+                self.assertEqual(r["ar"], {"g": ans[r["id"]][0], "w": ans[r["id"]][1]}, r["id"])
+                seen += 1
+            else:
+                self.assertNotIn("ar", r)
+        self.assertTrue(seen)
+        self.assertEqual(self.go(World(NOW, fail_popular=True), out="out2", st="state2"), 0, "\n".join(self.lines))
+        for hid in self.index("out2")["lists"]:
+            for r in rows_of(self.hero(hid, "out2")):
+                self.assertNotIn("ar", r)
+
     def test_prev_season_kept_in_state(self):
         w1 = World(NOW)
         self.assertEqual(self.go(w1), 0)

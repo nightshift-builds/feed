@@ -323,6 +323,8 @@ def run(src, st, out, now, site_url="", history_dir=None, log=print, validate=Tr
     games = known = empty_ete = 0
     working = set()     # detail keys of every build looked at this run (kept in the state, so the next run does not fetch them again)
 
+    # every rank's games and wins of a build, from the same answer as the popular lists: shown beside the circle-scoped numbers
+    ar_of = {int(r["hero_build_id"]): (int(r.get("matches") or 0), int(r.get("wins") or 0)) for r in pop_all if r.get("hero_build_id")}
     for h in sorted(heroes):
         key = heroes[h]["key"]
         slot_of = heroes[h]["slots"]
@@ -400,6 +402,8 @@ def run(src, st, out, now, site_url="", history_dir=None, log=print, validate=Tr
                           {"old": 1 if int(m.get("upd") or 0) < big_patch else 0, "gone": gone.get(b, 0)})
             if mixes.get(b):
                 r["mix"] = mixes[b]   # [gun, vitality, spirit] percents of the build's souls
+            if b in ar_of:
+                r["ar"] = {"g": ar_of[b][0], "w": ar_of[b][1]}
             r["author"]["_a"] = a
             out_rows.append(r)
         # places within each region view, with the same author cap as the all-region list
