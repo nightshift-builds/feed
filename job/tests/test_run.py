@@ -139,7 +139,17 @@ class EndToEnd(Base):
     def test_no_account_ids_published(self):
         w = World(NOW)
         self.assertEqual(self.go(w), 0)
-        self.assertEqual(publish.no_ids(self.d / "out", w.account_ids()), [])
+        # the one published id: a High rank list row's author ("acc"), for the author's avatar
+        accs = set()
+        for f in (self.d / "out" / "data").glob("*/*.json"):
+            for r in rows_of(json.loads(f.read_text(encoding="utf-8"))):
+                if "acc" in r["author"]:
+                    accs.add(r["author"]["acc"])
+        self.assertTrue(accs)
+        self.assertLessEqual(accs, w.account_ids())
+        self.assertEqual(publish.no_ids(self.d / "out", w.account_ids() - accs), [])
+        for f in (self.d / "out" / "data").glob("*/popular/*.json"):
+            self.assertFalse(any("acc" in r["author"] for r in rows_of(json.loads(f.read_text(encoding="utf-8")))), f)
         self.assertEqual(publish.no_ids(self.d / "hist", w.account_ids()), [])
 
     def test_state_private(self):

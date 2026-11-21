@@ -467,6 +467,10 @@ def run(src, st, out, now, site_url="", history_dir=None, log=print, validate=Tr
     for obj in list(lists.values()) + list(pops.values()):
         for i, r in enumerate(obj["builds"]):
             r["author"]["name"] = names.get(r["author"].get("_a"), "")
+            if obj in lists.values() and r["author"].get("_a"):
+                # the High rank list's author: the account the game's own build list shows with its avatar; the only account id
+                # published (runners, Popular and the history stay without ids)
+                r["author"]["acc"] = int(r["author"]["_a"])
             r["run"] = [{"name": names[x["_a"]], "badge": x["badge"], "g": x["g"]} for x in r["run"] if names.get(x["_a"])]
             obj["builds"][i] = shape.public(r)
 
