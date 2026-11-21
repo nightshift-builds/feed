@@ -2,6 +2,7 @@
 import math
 import unittest
 
+import config
 import rank
 
 DAY = 86400
@@ -149,12 +150,12 @@ class Dupes(unittest.TestCase):
 class Select(unittest.TestCase):
     def test_select_order_and_caps(self):
         sc = []
-        for i in range(30):
+        for i in range(config.CAP + 5):
             sc.append({"bid": 1000 + i, "best": 100 - i, "p": 0, "upd": 0, "author": 500 + i})
         for k, i in enumerate((0, 2, 4, 6, 7)):     # author A holds 5 builds within the first 8 places
             sc[i]["author"] = 1
         ids = rank.select(sc, "ete")
-        self.assertEqual(len(ids), 25)
+        self.assertEqual(len(ids), config.CAP)
         first20 = ids[:20]
         self.assertEqual(sum(1 for b in first20 if sc[b - 1000]["author"] == 1), 3)
         self.assertEqual(ids[20:22], [1006, 1007])   # the two moved after place 20, in their own order

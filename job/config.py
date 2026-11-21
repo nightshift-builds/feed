@@ -31,14 +31,14 @@ MAIN_OTHER = 0.5          # the build is not the runner's most-played build on t
 RECENT_OLD = 0.5          # the runner's last game on it is older than RECENT_DAYS
 
 # lists (5.3)
-CAP = 25                  # builds per circle list
+CAP = 50                  # builds per circle list
 AUTHOR_CAP = 3            # at most 3 builds of one author ...
 AUTHOR_CAP_TOP = 20       # ... within the first 20 places
-PRELIM = 40               # details are fetched for the preliminary top 40 of each circle (plan ruling 5)
+PRELIM = 60               # details are fetched for the preliminary top 60 of each circle (plan ruling 5; above CAP)
 POPULAR_CAP = 25
 
 # size guard (5.7), bytes of compact JSON
-LIST_MAX = 60_000
+LIST_MAX = 120_000
 DETAIL_MAX = 16_000
 
 # text (6.2)

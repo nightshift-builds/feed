@@ -61,7 +61,7 @@ class Row(unittest.TestCase):
 class Fit(unittest.TestCase):
     def test_fit_list(self):
         rows = []
-        for i in range(200):
+        for i in range(500):
             rows.append({"id": i, "name": "x" * 40, "author": {"name": "y" * 30}, "run": [{"name": "z" * 30, "badge": 111, "g": 3}] * 3,
                          "use": {"asc": {"p": 1, "g": 1, "w": 1, "last": 1, "best": float(i), "r": {"eu": {"p": 1, "g": 1, "w": 1, "best": 1.0}}}}})
         obj = {"v": 1, "builds": rows}
@@ -69,7 +69,7 @@ class Fit(unittest.TestCase):
         self.assertLessEqual(len(shape.dumps(fitted).encode("utf-8")), config.LIST_MAX)
         self.assertGreater(dropped, 0)
         kept = {r["id"] for r in fitted["builds"]}
-        self.assertIn(199, kept)
+        self.assertIn(499, kept)
         self.assertNotIn(0, kept)          # the lowest best goes first
         small = {"v": 1, "builds": rows[:3]}
         self.assertEqual(shape.fit_list(small)[1], 0)
